@@ -1,0 +1,11 @@
+services:
+  mkanban:
+    build: .
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - kanban-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  kanban-data:
