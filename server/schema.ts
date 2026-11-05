@@ -35,6 +35,7 @@ export const columnDeletionSchema = z.discriminatedUnion('mode', [
 ]);
 export const moveSchema = z.object({ index: z.number().int().min(0), columnId: idSchema });
 export const splitSchema = z.object({ title, points: z.number().int().min(0).max(999), checklistIds: z.array(idSchema).default([]), expectedUpdatedAt: z.string().optional() });
+export const duplicateCardSchema = z.object({ title: title.optional(), expectedUpdatedAt: z.string().optional() }).strict();
 export const pointSnapshotSchema = z.object({
   at: z.string().datetime(),
   total: z.number().int().nonnegative(),
@@ -77,6 +78,16 @@ export const decisionQuerySchema = z.object({
   sort: z.enum(['newest', 'oldest', 'updated', 'number']).default('newest'),
 }).strict();
 
+export const httpUrlSchema = z.string().trim().url().max(2000).refine(value => { try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; } }, 'Utilisez une adresse HTTP ou HTTPS');
+export const entityRefSchema = z.object({ kind: z.enum(['card', 'decision', 'document', 'requirement', 'url']), id: z.string().min(1).max(2000) }).strict();
+export const knowledgeInputSchema = z.object({ kind: z.enum(['document', 'requirement']), title, content: z.string().max(100_000).default(''), url: httpUrlSchema.nullable().default(null) }).strict();
+export const knowledgePatchSchema = knowledgeInputSchema.omit({ kind: true }).partial();
+export const storedKnowledgeSchema = knowledgeInputSchema.extend({ id: idSchema, createdAt: z.string().datetime(), updatedAt: z.string().datetime(), deletedAt: z.string().datetime().nullable() });
+export const relationInputSchema = z.object({ source: entityRefSchema, target: entityRefSchema, type: z.enum(['relates_to', 'implements', 'documents', 'validates']).default('relates_to') }).strict();
+export const storedRelationSchema = relationInputSchema.extend({ id: idSchema, createdAt: z.string().datetime() });
+export const impactReviewSchema = z.object({ id: idSchema, decisionId: idSchema, replacementId: idSchema, entity: entityRefSchema, entityTitle: z.string(), distance: z.number().int().positive(), path: z.array(entityRefSchema), createdAt: z.string().datetime(), updatedAt: z.string().datetime(), reviewedAt: z.string().datetime().nullable(), note: z.string().max(5000) });
+export const reviewPatchSchema = z.object({ reviewed: z.boolean(), note: z.string().max(5000).optional(), expectedUpdatedAt: z.string().optional() }).strict();
+
 export type CardInput = z.infer<typeof cardInputSchema>;
 export type Card = CardInput & { id: string; columnId: string; position: number; createdAt: string; updatedAt: string };
 export type Column = z.infer<typeof columnInputSchema> & { id: string; boardId: string; position: number; cards: Card[] };
@@ -87,4 +98,8 @@ export type Decision = z.infer<typeof storedDecisionSchema>;
 export type DecisionStatus = DecisionInput['status'];
 export type DecisionType = DecisionInput['type'];
 export type DecisionQuery = z.infer<typeof decisionQuerySchema>;
-export type Board = BoardSummary & { schemaVersion: 1; columns: Column[]; pointHistory: PointSnapshot[]; decisions: Decision[]; nextDecisionNumber: number };
+export type EntityRef = z.infer<typeof entityRefSchema>;
+export type KnowledgeItem = z.infer<typeof storedKnowledgeSchema>;
+export type Relation = z.infer<typeof storedRelationSchema>;
+export type ImpactReview = z.infer<typeof impactReviewSchema>;
+export type Board = BoardSummary & { schemaVersion: 1; columns: Column[]; pointHistory: PointSnapshot[]; decisions: Decision[]; nextDecisionNumber: number; knowledge: KnowledgeItem[]; relations: Relation[]; impactReviews: ImpactReview[] };

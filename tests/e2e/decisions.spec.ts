@@ -135,6 +135,7 @@ test('MCP decisions refresh live, stale edits and deletion are protected, delete
     expect((await read()).decisions[0].deletedAt).toBeNull();
     await page.getByRole('button', { name: 'Fermer', exact: true }).click();
     // Refresh the project before opening a new draft.
+    await page.getByRole('button', { name: 'Déplier le contenu ADR-001', exact: true }).click();
     await expect.poll(async () => page.locator('.decision-bubble').filter({ hasText: 'Version IA' }).count(), { timeout: 8000 }).toBe(1);
     await page.getByRole('button', { name: /^Ouvrir ADR-001/ }).click();
     await expect(page.getByLabel('Contexte', { exact: true })).toHaveValue('Version IA');
@@ -167,6 +168,8 @@ test('mobile journal and long editor support keyboard navigation and keep action
   await page.goto('/');
   await page.getByRole('tab', { name: /^Kanban/ }).focus();
   await page.keyboard.press('End');
+  await expect(page.getByRole('tab', { name: 'Relations', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('tab', { name: 'Décisions', exact: true })).toBeFocused();
   await expect(page.getByRole('tab', { name: 'Décisions', exact: true })).toHaveAttribute('aria-selected', 'true');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -180,4 +183,35 @@ test('mobile journal and long editor support keyboard navigation and keep action
   expect(await page.locator('dialog').evaluate(el => el.scrollWidth <= el.clientWidth && el.scrollTop === 0)).toBe(true);
   await page.keyboard.press('Escape');
   await expect(page.locator('dialog')).toHaveCount(0);
+});
+
+test('decision bubbles expand complete Markdown, retain live content and collapse independently on mobile', async ({ page, request }) => {
+  const { project, create } = await fixture(page, request);
+  const context = `## Le contexte détaillé\n\n**Texte formaté**\n\n${Array.from({ length: 35 }, (_, i) => `Paragraphe ${i + 1} : une explication complète.\n\n`).join('')}Dernière ligne du contexte.`;
+  const first = await create({ title: 'Décision longue', context, alternatives: '- Option A\n- Option B', outcome: '```ts\nconst choix = "JSON";\n```', rationale: '**Justification complète**', consequences: 'Dernière conséquence à conserver.' });
+  await create({ title: 'Autre décision', context: 'Un autre contexte intégral.' });
+  await openJournal(page);
+  const bubble = page.locator('.decision-bubble').filter({ hasText: 'Décision longue' });
+  await expect(bubble).toContainText('ADR-001'); await expect(bubble).toContainText('Brouillon');
+  await expect(page.getByRole('region', { name: 'Contenu complet ADR-001', exact: true })).toBeHidden();
+  await bubble.getByRole('button', { name: 'Déplier le contenu ADR-001', exact: true }).click();
+  const full = page.getByRole('region', { name: 'Contenu complet ADR-001', exact: true });
+  await expect(full.getByRole('heading', { name: 'Le contexte détaillé', exact: true })).toBeVisible();
+  await expect(full.locator('strong').first()).toHaveText('Texte formaté');
+  await expect(full.getByText('Dernière ligne du contexte.', { exact: true })).toBeVisible();
+  await expect(full.getByText('Dernière conséquence à conserver.', { exact: true })).toBeVisible();
+  await expect(full.locator('pre code')).toContainText('const choix = "JSON";');
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Déplier le contenu ADR-002', exact: true }).click();
+  await expect(full).toBeVisible();
+  await request.patch(`/api/boards/${project.id}/decisions/${first.id}`, { data: { consequences: '**Conséquence actualisée**' } });
+  await expect(full.locator('strong').last()).toHaveText('Conséquence actualisée', { timeout: 8000 });
+  await page.setViewportSize({ width: 390, height: 700 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const collapse = bubble.getByRole('button', { name: 'Replier le contenu ADR-001', exact: true });
+  await collapse.focus(); await page.keyboard.press('Enter');
+  await expect(full).toBeHidden(); await expect(bubble).toContainText('Décision longue');
+  await expect(page.getByRole('region', { name: 'Contenu complet ADR-002', exact: true })).toBeVisible();
+  await bubble.getByRole('button', { name: /^Ouvrir ADR-001/ }).click();
+  await expect(page.getByLabel('Contexte', { exact: true })).toHaveValue(context);
 });

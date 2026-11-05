@@ -7,13 +7,16 @@ import { autoScheduleSchema, boardInputSchema, cardInputSchema, cardPatchSchema,
 import { buildGantt, orderedCards, planAutomatically } from '../shared/planning.js';
 import { decisionInputSchema, decisionPatchSchema, decisionQuerySchema, storedDecisionSchema, type Decision, type DecisionInput } from './schema.js';
 import { decisionAuthority, decisionPolicy, decisionTransitions, filterDecisions } from '../shared/decisions.js';
+import { duplicateCardSchema } from './schema.js';
+import { entityRefSchema, httpUrlSchema, impactReviewSchema, knowledgeInputSchema, knowledgePatchSchema, relationInputSchema, reviewPatchSchema, storedKnowledgeSchema, storedRelationSchema, type EntityRef, type KnowledgeItem } from './schema.js';
+import { allRelations, analyzeImpact, describeEntity, relatedEntities, sameEntity } from '../shared/traceability.js';
 
 export class StoreError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
 const storedCardSchema = cardInputSchema.extend({ id: idSchema, columnId: idSchema, position: z.number().int().nonnegative(), createdAt: z.string(), updatedAt: z.string() });
 const storedColumnSchema = columnInputSchema.extend({ id: idSchema, boardId: idSchema, position: z.number().int().nonnegative(), cards: z.array(storedCardSchema) });
-const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema), pointHistory: pointHistorySchema, decisions: z.array(storedDecisionSchema).default([]), nextDecisionNumber: z.number().int().positive().default(1) });
+const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema), pointHistory: pointHistorySchema, decisions: z.array(storedDecisionSchema).default([]), nextDecisionNumber: z.number().int().positive().default(1), knowledge: z.array(storedKnowledgeSchema).default([]), relations: z.array(storedRelationSchema).default([]), impactReviews: z.array(impactReviewSchema).default([]) });
 const nextTimestamp = (current: string) => new Date(Math.max(Date.now(), Date.parse(current) + 1)).toISOString();
 const decisionInputSnapshot = (decision: Decision): DecisionInput => {
   const { title, type, status, context, alternatives, outcome, rationale, consequences, tags, links, supersededBy } = decision;
@@ -118,6 +121,7 @@ export class Store {
     throw new StoreError('Carte introuvable', 404);
   }
   private cleanDependencies(board: Board, removed: Set<string>) {
+    board.relations = board.relations.filter(r => ![r.source, r.target].some(e => e.kind === 'card' && removed.has(e.id)));
     for (const card of board.columns.flatMap(c => c.cards)) {
       if (card.dependencies.some(id => removed.has(id))) {
         card.dependencies = card.dependencies.filter(id => !removed.has(id));
@@ -159,7 +163,7 @@ export class Store {
   async createBoard(input: unknown): Promise<Board> {
     const values = boardInputSchema.parse(input);
     return this.locked(async () => {
-      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: this.now().toISOString(), columns: [], pointHistory: [], decisions: [], nextDecisionNumber: 1 };
+      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: this.now().toISOString(), columns: [], pointHistory: [], decisions: [], nextDecisionNumber: 1, knowledge: [], relations: [], impactReviews: [] };
       this.recordPoints(board);
       await this.write(board); return board;
     });
@@ -233,13 +237,14 @@ export class Store {
       this.checkDecision(board, decisionId, values);
       if (JSON.stringify(values) === JSON.stringify(decisionInputSnapshot(decision))) return { ...decision, authority: decisionAuthority(decision) };
       const at = new Date(Math.max(this.now().valueOf(), Date.parse(decision.updatedAt) + 1)).toISOString();
-      const previous = decision.status;
+      const previous = decision.status, previousSuccessor = decision.supersededBy;
       if (values.status !== previous) {
         decision.statusChangedAt = at;
         if (['accepted', 'rejected'].includes(values.status)) decision.decidedAt = at;
       }
       Object.assign(decision, values, { updatedAt: at });
       decision.history.push({ at, action: 'updated', fromStatus: previous, snapshot: structuredClone(values) });
+      if (decision.status === 'superseded' && (previous !== 'superseded' || previousSuccessor !== decision.supersededBy)) this.recordImpact(board, decision.id, at);
       return { ...decision, authority: decisionAuthority(decision) };
     });
   }
@@ -351,6 +356,111 @@ export class Store {
       card.points -= values.points; card.updatedAt = now;
       column.cards.splice(column.cards.indexOf(card) + 1, 0, newCard);
       return { original: card, created: newCard };
+    });
+  }
+  async duplicateCard(boardId: string, cardId: string, input: unknown = {}) {
+    const values = duplicateCardSchema.parse(input);
+    return this.mutate(boardId, board => {
+      const { card, column } = this.card(board, cardId);
+      if (values.expectedUpdatedAt && values.expectedUpdatedAt !== card.updatedAt) throw new StoreError('Cette carte a changé. Rouvrez ses actions avant de la dupliquer.', 409);
+      const suffix = ' (copie)';
+      const at = new Date(Math.max(this.now().valueOf(), Date.parse(card.updatedAt) + 1)).toISOString();
+      const copy: Card = {
+        ...structuredClone(card), id: randomUUID(), title: values.title ?? `${card.title.slice(0, 200 - suffix.length).trimEnd()}${suffix}`,
+        checklist: card.checklist.map(item => ({ ...item, id: randomUUID() })), completed: false, createdAt: at, updatedAt: at,
+      };
+      column.cards.splice(column.cards.indexOf(card) + 1, 0, copy);
+      return copy;
+    });
+  }
+  async listKnowledge(boardId: string, includeDeleted = false) {
+    return (await this.getBoard(boardId)).knowledge.filter(k => includeDeleted || !k.deletedAt);
+  }
+  async createKnowledge(boardId: string, input: unknown) {
+    const values = knowledgeInputSchema.parse(input);
+    return this.mutate(boardId, board => {
+      const at = this.now().toISOString();
+      const item: KnowledgeItem = { ...values, id: randomUUID(), createdAt: at, updatedAt: at, deletedAt: null };
+      board.knowledge.push(item); return item;
+    });
+  }
+  private knowledgeItem(board: Board, id: string) {
+    const item = board.knowledge.find(k => k.id === id);
+    if (!item) throw new StoreError('Document ou exigence introuvable', 404);
+    return item;
+  }
+  async updateKnowledge(boardId: string, id: string, input: unknown, expectedUpdatedAt?: string) {
+    const patch = knowledgePatchSchema.parse(input);
+    return this.mutate(boardId, board => {
+      const item = this.knowledgeItem(board, id);
+      if (item.deletedAt) throw new StoreError('Cet élément est supprimé et reste en lecture seule.', 409);
+      if (expectedUpdatedAt && expectedUpdatedAt !== item.updatedAt) throw new StoreError('Cet élément a changé. Fermez et rouvrez-le avant de réessayer.', 409);
+      Object.assign(item, patch, { updatedAt: new Date(Math.max(this.now().valueOf(), Date.parse(item.updatedAt) + 1)).toISOString() });
+      return item;
+    });
+  }
+  async deleteKnowledge(boardId: string, id: string, expectedUpdatedAt?: string) {
+    return this.mutate(boardId, board => {
+      const item = this.knowledgeItem(board, id);
+      if (expectedUpdatedAt && expectedUpdatedAt !== item.updatedAt) throw new StoreError('Cet élément a changé. Fermez et rouvrez-le avant de réessayer.', 409);
+      if (!item.deletedAt) item.updatedAt = item.deletedAt = new Date(Math.max(this.now().valueOf(), Date.parse(item.updatedAt) + 1)).toISOString();
+      return { deleted: true, retainedRelations: true };
+    });
+  }
+  private checkEntity(board: Board, ref: EntityRef) {
+    if (ref.kind === 'url') { httpUrlSchema.parse(ref.id); return; }
+    const item = describeEntity(board, ref);
+    if (item.missing || item.deleted) throw new StoreError('Choisissez un élément actif de ce projet.', 404);
+  }
+  async listRelations(boardId: string, entity?: unknown) {
+    const board = await this.getBoard(boardId);
+    if (entity === undefined) return allRelations(board);
+    return relatedEntities(board, entityRefSchema.parse(entity));
+  }
+  async createRelation(boardId: string, input: unknown) {
+    const values = relationInputSchema.parse(input);
+    return this.mutate(boardId, board => {
+      this.checkEntity(board, values.source); this.checkEntity(board, values.target);
+      if (sameEntity(values.source, values.target)) throw new StoreError('Un élément ne peut pas être relié à lui-même.');
+      if (allRelations(board).some(r => r.type === values.type && (sameEntity(r.source, values.source) && sameEntity(r.target, values.target) || values.type === 'relates_to' && sameEntity(r.source, values.target) && sameEntity(r.target, values.source)))) throw new StoreError('Cette relation existe déjà.', 409);
+      const relation = { ...values, id: randomUUID(), createdAt: this.now().toISOString() };
+      board.relations.push(relation); return relation;
+    });
+  }
+  async deleteRelation(boardId: string, relationId: string) {
+    return this.mutate(boardId, board => {
+      const index = board.relations.findIndex(r => r.id === relationId);
+      if (index < 0) throw new StoreError('Relation introuvable. Les liens historiques des décisions se modifient dans leur décision.', 404);
+      board.relations.splice(index, 1); return { deleted: true };
+    });
+  }
+  private recordImpact(board: Board, decisionId: string, at: string) {
+    const decision = this.decision(board, decisionId);
+    if (decision.deletedAt || decision.status !== 'superseded' || !decision.supersededBy) throw new StoreError('Seule une décision remplacée peut signaler des éléments à réexaminer.');
+    for (const affected of analyzeImpact(board, decisionId)) {
+      if (affected.entity.kind === 'decision' || board.impactReviews.some(r => r.decisionId === decisionId && r.replacementId === decision.supersededBy && sameEntity(r.entity, affected.entity))) continue;
+      board.impactReviews.push({ id: randomUUID(), decisionId, replacementId: decision.supersededBy, entity: affected.entity, entityTitle: affected.title, distance: affected.distance, path: affected.path, createdAt: at, updatedAt: at, reviewedAt: null, note: '' });
+    }
+  }
+  async analyzeDecisionImpact(boardId: string, decisionId: string, recordReviews = false) {
+    const result = (board: Board) => {
+      const decision = this.decision(board, decisionId);
+      return { decisionId, replacementId: decision.supersededBy, affected: analyzeImpact(board, decisionId), reviews: board.impactReviews.filter(r => r.decisionId === decisionId), policy: 'Potential review impact, not automatic changes or proof of implementation. Generic relations are traversed in both directions, Gantt dependencies only towards successors. Supersession links are not traversed.' };
+    };
+    if (!recordReviews) return result(await this.getBoard(boardId));
+    return this.mutate(boardId, board => { this.recordImpact(board, decisionId, this.now().toISOString()); return result(board); });
+  }
+  async listImpactReviews(boardId: string, status: 'pending' | 'reviewed' | 'all' = 'pending') {
+    return (await this.getBoard(boardId)).impactReviews.filter(r => status === 'all' || (status === 'pending' ? !r.reviewedAt : !!r.reviewedAt));
+  }
+  async reviewImpact(boardId: string, reviewId: string, input: unknown) {
+    const values = reviewPatchSchema.parse(input);
+    return this.mutate(boardId, board => {
+      const review = board.impactReviews.find(r => r.id === reviewId);
+      if (!review) throw new StoreError('Signalement introuvable', 404);
+      if (values.expectedUpdatedAt && values.expectedUpdatedAt !== review.updatedAt) throw new StoreError('Ce signalement a changé. Rouvrez-le avant de réessayer.', 409);
+      const at = new Date(Math.max(this.now().valueOf(), Date.parse(review.updatedAt) + 1)).toISOString();
+      Object.assign(review, { reviewedAt: values.reviewed ? at : null, updatedAt: at, note: values.note ?? review.note }); return review;
     });
   }
 }

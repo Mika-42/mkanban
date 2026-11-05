@@ -1,14 +1,20 @@
 import { useState } from 'react';
-import { BookOpen, Clock3, FileText, Link2, Plus, Search, SlidersHorizontal } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronUp, Clock3, FileText, Link2, Pencil, Plus, Search, SlidersHorizontal } from 'lucide-react';
 import type { Board, Card, Decision, DecisionQuery, DecisionStatus, DecisionType } from '../../server/schema';
 import { decisionAuthority, decisionCode, decisionStatuses, decisionTypes, filterDecisions } from '../../shared/decisions';
 import { DecisionEditor } from './DecisionEditor';
 import { DecisionBadge, DecisionTime } from './DecisionComponents';
+import type { EntityNavigation } from './EntityRelations';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
+const contentFields = [['context', 'Contexte'], ['alternatives', 'Alternatives'], ['outcome', 'Décision retenue'], ['rationale', 'Justification'], ['consequences', 'Conséquences']] as const;
 const initialQuery: DecisionQuery = { search: '', dateField: 'createdAt', deleted: 'exclude', sort: 'newest' };
-export function BoardDecisions({ board, refresh, onCard }: { board: Board; refresh: () => Promise<void>; onCard: (card: Card) => void }) {
+export function BoardDecisions({ board, refresh, onCard, onNavigate }: { board: Board; refresh: () => Promise<void>; onCard: (card: Card) => void; onNavigate: EntityNavigation }) {
   const [query, setQuery] = useState<DecisionQuery>(initialQuery);
   const [advanced, setAdvanced] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleExpanded = (id: string) => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const advancedCount = [query.dateFrom, query.dateTo, query.tag, query.linkedCardId, query.deleted !== 'exclude', query.sort !== 'newest', query.dateField !== 'createdAt'].filter(Boolean).length;
   const [editor, setEditor] = useState<Decision | 'new' | null>(null);
   const patchQuery = (patch: Partial<DecisionQuery>) => setQuery(current => ({ ...current, ...patch }));
@@ -41,8 +47,11 @@ export function BoardDecisions({ board, refresh, onCard }: { board: Board; refre
     <div className="decision-results" role="status">{decisions.length} décision{decisions.length > 1 ? 's' : ''} affichée{decisions.length > 1 ? 's' : ''} · {active.length} dans le journal</div>
     {!decisions.length ? <div className="decision-empty"><FileText size={30} /><h3>{board.decisions.length ? 'Aucune décision ne correspond' : 'Gardez une trace de vos choix'}</h3><p>{board.decisions.length ? 'Ajustez les filtres pour retrouver une décision.' : 'Documentez une première décision et donnez du contexte aux prochains choix.'}</p>{!board.decisions.length && <button className="button secondary" onClick={() => setEditor('new')}><Plus size={16} />Créer une décision</button>}</div> : <ol className="decision-timeline">{decisions.map(decision => {
       const successor = board.decisions.find(d => d.id === decision.supersededBy);
+      const isExpanded = expanded.has(decision.id), contentId = `decision-content-${decision.id}`;
       return <li key={decision.id} className={`decision-bubble decision-${decisionStatuses[decision.status].color} ${decision.deletedAt ? 'decision-deleted' : ''}`}>
-        <button className="decision-open" aria-label={`Ouvrir ${decisionCode(decision.number)} : ${decision.title}`} onClick={() => openDecision(decision)}><span className="decision-bubble-top"><span className="decision-number">{decisionCode(decision.number)}</span><span className="decision-type">{decisionTypes[decision.type]}</span><DecisionBadge status={decision.status} />{decision.deletedAt && <span className="decision-removed-label">Supprimée</span>}</span><h3>{decision.title}</h3><p className="decision-excerpt">{decision.outcome || decision.context || 'Le contexte de cette décision reste à documenter.'}</p><span className="decision-bubble-meta"><span><Clock3 size={13} />Créée le <DecisionTime value={decision.createdAt} /></span>{decision.decidedAt && <span>Dernière validation ou rejet : <DecisionTime value={decision.decidedAt} /></span>}<span className={`decision-authority ${decisionAuthority(decision)}`}>{decisionAuthority(decision) === 'binding' ? 'Référence officielle' : decisionAuthority(decision) === 'historical' ? 'Historique' : 'Proposition'}</span></span>{!!decision.tags.length && <span className="decision-tags">{decision.tags.map(tag => <span key={tag}>{tag}</span>)}</span>}</button>
+        <button className="decision-open" aria-label={`${isExpanded ? 'Replier' : 'Déplier'} ${decisionCode(decision.number)} : ${decision.title}`} aria-expanded={isExpanded} aria-controls={contentId} onClick={() => toggleExpanded(decision.id)}><span className="decision-bubble-top"><span className="decision-number">{decisionCode(decision.number)}</span><span className="decision-type">{decisionTypes[decision.type]}</span><DecisionBadge status={decision.status} />{decision.deletedAt && <span className="decision-removed-label">Supprimée</span>}</span><h3>{decision.title}</h3><span className="decision-bubble-meta"><span><Clock3 size={13} />Créée le <DecisionTime value={decision.createdAt} /></span>{decision.decidedAt && <span>Dernière validation ou rejet : <DecisionTime value={decision.decidedAt} /></span>}<span className={`decision-authority ${decisionAuthority(decision)}`}>{decisionAuthority(decision) === 'binding' ? 'Référence officielle' : decisionAuthority(decision) === 'historical' ? 'Historique' : 'Proposition'}</span></span>{!!decision.tags.length && <span className="decision-tags">{decision.tags.map(tag => <span key={tag}>{tag}</span>)}</span>}</button>
+        <div className="decision-bubble-actions"><button aria-label={`${isExpanded ? 'Replier' : 'Déplier'} le contenu ${decisionCode(decision.number)}`} aria-expanded={isExpanded} aria-controls={contentId} onClick={() => toggleExpanded(decision.id)}>{isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}{isExpanded ? 'Replier' : 'Lire la décision'}</button><button aria-label={`Ouvrir ${decisionCode(decision.number)} : ${decision.title}`} onClick={() => openDecision(decision)}><Pencil size={13} />{decision.deletedAt ? 'Consulter l’historique' : 'Modifier'}</button></div>
+        <div id={contentId} className="decision-expanded" role="region" aria-label={`Contenu complet ${decisionCode(decision.number)}`} hidden={!isExpanded}>{isExpanded && contentFields.map(([key, label]) => <section key={key}><h4>{label}</h4><div className="markdown"><Markdown remarkPlugins={[remarkGfm]}>{decision[key] || '*Non renseigné*'}</Markdown></div></section>)}</div>
         {(successor || decision.links.length > 0) && <div className="decision-bubble-links">{successor && <button onClick={() => openDecision(successor)}><Link2 size={13} />Remplacée par {decisionCode(successor.number)} · {successor.title}</button>}{decision.links.map(link => {
           const card = link.kind === 'card' ? cards.find(c => c.id === link.target) : undefined;
           const related = link.kind === 'decision' ? board.decisions.find(d => d.id === link.target) : undefined;
@@ -50,6 +59,6 @@ export function BoardDecisions({ board, refresh, onCard }: { board: Board; refre
         })}</div>}
       </li>;
     })}</ol>}
-    {editor && <DecisionEditor key={editor === 'new' ? 'new' : editor.id} decision={editor === 'new' ? null : editor} board={board} onClose={() => setEditor(null)} onSaved={refresh} />}
+    {editor && <DecisionEditor key={editor === 'new' ? 'new' : editor.id} decision={editor === 'new' ? null : editor} board={board} onClose={() => setEditor(null)} onSaved={refresh} onNavigate={entity => { setEditor(null); onNavigate(entity); }} />}
   </section>;
 }

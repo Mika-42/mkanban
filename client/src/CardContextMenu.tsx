@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { GitFork, Trash2, UserRoundPlus } from 'lucide-react';
+import { Copy, GitFork, Trash2, UserRoundPlus } from 'lucide-react';
 import type { Card } from '../../server/schema';
 
 export type CardMenuAnchor = { x: number; y: number; focusTarget: HTMLElement };
-export type CardQuickAction = 'assign' | 'delete' | 'split';
-export function CardContextMenu({ card, anchor, onClose, onAction }: { card: Card; anchor: CardMenuAnchor; onClose: (restoreFocus: boolean) => void; onAction: (action: CardQuickAction) => void }) {
+export type CardQuickAction = 'assign' | 'delete' | 'split' | 'duplicate';
+export function CardContextMenu({ card, anchor, onClose, onAction, duplicating = false }: { card: Card; anchor: CardMenuAnchor; onClose: (restoreFocus: boolean) => void; onAction: (action: CardQuickAction) => void; duplicating?: boolean }) {
   const menu = useRef<HTMLDivElement>(null);
   const close = useRef(onClose); close.current = onClose;
   useLayoutEffect(() => {
@@ -28,13 +28,14 @@ export function CardContextMenu({ card, anchor, onClose, onAction }: { card: Car
     if (e.key === 'Tab') { onClose(true); return; }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
     e.preventDefault();
-    const items = [...menu.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    const items = [...menu.current!.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
     const current = items.indexOf(document.activeElement as HTMLButtonElement);
     const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : (current + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
     items[next].focus();
   }}>
     <div className="card-context-title" role="presentation" title={card.title}>{card.title}</div>
     <button role="menuitem" onClick={() => onAction('assign')}><UserRoundPlus size={16} />Assigner…</button>
+    <button role="menuitem" disabled={duplicating} onClick={() => onAction('duplicate')}><Copy size={16} />{duplicating ? 'Duplication…' : 'Dupliquer'}</button>
     <button role="menuitem" onClick={() => onAction('split')}><GitFork size={16} />Scinder…</button>
     <div className="card-context-separator" role="separator" />
     <button role="menuitem" className="danger-text" onClick={() => onAction('delete')}><Trash2 size={16} />Supprimer…</button>

@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { DndContext, DragOverlay, PointerSensor, KeyboardSensor, useSensor, useSensors, closestCorners, pointerWithin, type DragEndEvent, type CollisionDetection } from '@dnd-kit/core';
 import { SortableContext, useSortable, horizontalListSortingStrategy, verticalListSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -23,6 +23,14 @@ export function BoardView({ board, search, member, status, flag, onCard, refresh
   const [contextMenu, setContextMenu] = useState<(CardMenuAnchor & { cardId: string }) | null>(null);
   const contextCard = board.columns.flatMap(c => c.cards).find(c => c.id === contextMenu?.cardId);
   const [action, setAction] = useState<{ type: CardQuickAction; card: Card; focusTarget: HTMLElement } | null>(null);
+  const duplication = useRef(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const duplicateCard = async (card: Card, trigger: HTMLElement) => {
+    if (duplication.current) return;
+    duplication.current = true; setDuplicating(true);
+    try { await run(() => api(`/boards/${board.id}/cards/${card.id}/duplicate`, 'POST', { expectedUpdatedAt: card.updatedAt })); }
+    finally { duplication.current = false; setDuplicating(false); if (trigger.isConnected) trigger.focus(); }
+  };
   const showMenu: CardMenuHandler = (card, anchor) => setContextMenu({ ...anchor, cardId: card.id });
   const closeAction = () => {
     const trigger = action?.focusTarget, column = trigger?.closest('.kanban-column');
@@ -62,7 +70,7 @@ export function BoardView({ board, search, member, status, flag, onCard, refresh
     {columnForm && <ColumnForm column={columnForm === 'new' ? null : columnForm} boardId={board.id} onClose={() => setColumnForm(null)} onSaved={refresh} />}
     {newCardColumn && <NewCard column={newCardColumn} boardId={board.id} onClose={() => setNewCardColumn(null)} onSaved={async card => { await refresh(); setNewCardColumn(null); onCard(card); }} />}
     {deleteColumn && <DeleteColumnDialog column={deleteColumn} board={board} onClose={() => setDeleteColumnId(null)} onDeleted={refresh} />}
-    {contextMenu && contextCard && <CardContextMenu key={contextCard.id} card={contextCard} anchor={contextMenu} onClose={restore => { if (restore && contextMenu.focusTarget.isConnected) contextMenu.focusTarget.focus(); setContextMenu(null); }} onAction={type => { setAction({ type, card: structuredClone(contextCard), focusTarget: contextMenu.focusTarget }); setContextMenu(null); }} />}
+    {contextMenu && contextCard && <CardContextMenu key={contextCard.id} card={contextCard} anchor={contextMenu} duplicating={duplicating} onClose={restore => { if (restore && contextMenu.focusTarget.isConnected) contextMenu.focusTarget.focus(); setContextMenu(null); }} onAction={type => { if (type === 'duplicate') void duplicateCard(contextCard, contextMenu.focusTarget); else setAction({ type, card: structuredClone(contextCard), focusTarget: contextMenu.focusTarget }); setContextMenu(null); }} />}
     {action?.type === 'assign' && <AssignCardDialog card={action.card} board={board} onClose={closeAction} onSaved={refresh} />}
     {action?.type === 'delete' && <DeleteCardDialog card={action.card} boardId={board.id} onClose={closeAction} onSaved={refresh} />}
     {action?.type === 'split' && <SplitCardDialog card={action.card} boardId={board.id} onClose={closeAction} onSaved={async () => { await refresh(); closeAction(); }} />}

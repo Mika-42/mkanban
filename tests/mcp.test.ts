@@ -21,7 +21,7 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   const client = new Client({ name: 'integration-test', version: '1.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   t.after(() => client.close());
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 23);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 34);
   async function call(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
     assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -103,6 +103,35 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   const archived = await call('list_decisions', { boardId: board.id, deleted: 'only' }); assert.equal(archived.decisions[0].authority, 'historical'); assert.equal(archived.decisions[0].history.at(-1).action, 'deleted');
   const boardResource = await client.readResource({ uri: `kanban://boards/${board.id}` }); assert.equal(JSON.parse((boardResource.contents[0] as { text: string }).text).decisions[0].authority, 'historical');
   assert.equal((await fetch(`${base}/api/boards/${board.id}/decisions?dateFrom=2026-02-30`)).status, 400);
+  const duplicateSource = await call('get_card', { boardId: board.id, cardId: predecessor.id });
+  const duplicate = await call('duplicate_card', { boardId: board.id, cardId: predecessor.id, title: 'Copie via MCP', expectedUpdatedAt: duplicateSource.updatedAt });
+  assert.notEqual(duplicate.id, predecessor.id); assert.equal(duplicate.title, 'Copie via MCP'); assert.equal(duplicate.completed, false);
+  assert.equal((await (await fetch(`${base}/api/boards/${board.id}`)).json()).columns[0].cards[1].id, duplicate.id);
+  const staleDuplicate = await fetch(`${base}/api/boards/${board.id}/cards/${predecessor.id}/duplicate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expectedUpdatedAt: 'stale' }) }); assert.equal(staleDuplicate.status, 409);
+  const restDuplicate = await fetch(`${base}/api/boards/${board.id}/cards/${predecessor.id}/duplicate`, { method: 'POST' }); assert.equal(restDuplicate.status, 201);
+  const restCopy = await restDuplicate.json(); assert.equal((await call('get_card', { boardId: board.id, cardId: restCopy.id })).title, `${predecessor.title} (copie)`);
+  const document = await call('create_knowledge', { boardId: board.id, kind: 'document', title: 'Conception', content: '**Détails**', url: 'https://example.org/design' });
+  const requirement = await call('create_knowledge', { boardId: board.id, kind: 'requirement', title: 'Exigence locale' });
+  const revisedDocument = await call('update_knowledge', { boardId: board.id, itemId: document.id, content: '# Version revue', expectedUpdatedAt: document.updatedAt });
+  const traceDecision = await call('create_decision', { boardId: board.id, title: 'Conception initiale', status: 'accepted', outcome: 'A', rationale: 'Contexte initial' });
+  const ref = (kind: string, id: string) => ({ kind, id });
+  const relation = await call('create_relation', { boardId: board.id, source: ref('decision', traceDecision.id), target: ref('card', predecessor.id) });
+  await call('create_relation', { boardId: board.id, source: ref('card', predecessor.id), target: ref('document', document.id), type: 'documents' });
+  await call('create_relation', { boardId: board.id, source: ref('document', document.id), target: ref('requirement', requirement.id), type: 'validates' });
+  const relations = await call('list_relations', { boardId: board.id, entity: ref('card', predecessor.id) }); assert.ok(relations.some((r: { other: { id: string }; outgoing: boolean }) => r.other.id === traceDecision.id && !r.outgoing));
+  const apiRelations = await (await fetch(`${base}/api/boards/${board.id}/relations?kind=document&id=${document.id}`)).json(); assert.equal(apiRelations.length, 2);
+  const analysis = await call('analyze_impact', { boardId: board.id, decisionId: traceDecision.id }); assert.ok(analysis.affected.some((r: { entity: { id: string }; distance: number }) => r.entity.id === requirement.id && r.distance === 3));
+  const replacement = await call('create_decision', { boardId: board.id, title: 'Conception révisée', status: 'accepted', outcome: 'B', rationale: 'Nouveau contexte' });
+  await call('update_decision', { boardId: board.id, decisionId: traceDecision.id, status: 'superseded', supersededBy: replacement.id });
+  const pendingReviews = await call('list_impact_reviews', { boardId: board.id }); const flagged = pendingReviews.find((r: { entity: { id: string } }) => r.entity.id === requirement.id); assert.ok(flagged);
+  await call('review_impact', { boardId: board.id, reviewId: flagged.id, reviewed: true, note: 'Conforme après revue', expectedUpdatedAt: flagged.updatedAt });
+  await call('analyze_impact', { boardId: board.id, decisionId: traceDecision.id, recordReviews: true });
+  const reviewed = await (await fetch(`${base}/api/boards/${board.id}/impact-reviews?status=reviewed`)).json(); assert.equal(reviewed[0].note, 'Conforme après revue');
+  const staleReview = await fetch(`${base}/api/boards/${board.id}/impact-reviews/${flagged.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reviewed: false, expectedUpdatedAt: flagged.updatedAt }) }); assert.equal(staleReview.status, 409);
+  await call('delete_relation', { boardId: board.id, relationId: relation.id });
+  await call('delete_knowledge', { boardId: board.id, itemId: document.id, expectedUpdatedAt: revisedDocument.updatedAt });
+  assert.equal((await call('list_knowledge', { boardId: board.id })).length, 1); assert.equal((await call('list_knowledge', { boardId: board.id, includeDeleted: true })).length, 2);
+  const invalidDocument = await fetch(`${base}/api/boards/${board.id}/knowledge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'document', title: 'Invalide', url: 'invalid' }) }); assert.equal(invalidDocument.status, 400);
 });
 test('official stdio client reads and edits persisted JSON from a separate process', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mkanban-stdio-'));
@@ -127,4 +156,12 @@ test('official stdio client reads and edits persisted JSON from a separate proce
   const persisted = (await store.getBoard(board.id)).decisions[0]; assert.equal(persisted.title, 'Une décision via stdio');
   await store.updateDecision(board.id, persisted.id, { status: 'rejected', rationale: 'Historique commun' });
   const journal = await client.callTool({ name: 'list_decisions', arguments: { boardId: board.id } }); assert.equal(JSON.parse((journal.content as { text: string }[])[0].text).decisions[0].authority, 'historical');
+  const duplicated = await client.callTool({ name: 'duplicate_card', arguments: { boardId: board.id, cardId: source.id } }); assert.notEqual(duplicated.isError, true);
+  const copy = JSON.parse((duplicated.content as { text: string }[])[0].text);
+  assert.equal(copy.title, 'From separate process (copie)'); assert.equal(copy.points, 5);
+  assert.equal((await store.getCard(board.id, copy.id)).title, copy.title);
+  const knowledge = await client.callTool({ name: 'create_knowledge', arguments: { boardId: board.id, kind: 'requirement', title: 'Exigence via stdio' } }); assert.notEqual(knowledge.isError, true);
+  const item = JSON.parse((knowledge.content as { text: string }[])[0].text);
+  await client.callTool({ name: 'create_relation', arguments: { boardId: board.id, source: { kind: 'card', id: source.id }, target: { kind: 'requirement', id: item.id }, type: 'implements' } });
+  assert.equal((await store.listRelations(board.id, { kind: 'requirement', id: item.id })).length, 1);
 });
