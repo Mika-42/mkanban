@@ -55,6 +55,44 @@ test('split is atomic and conserves story points and checklist items', async t =
   await assert.rejects(store.splitCard(board.id, card.id, { title: 'No', points: 1, checklistIds: ['unknown'] }), /invalides/);
   assert.deepEqual(await store.getBoard(board.id), before);
 });
+test('duplicate creates an independent adjacent card with copied properties and accurate point history', async t => {
+  const { store, board, a, directory } = await fixture(t);
+  const predecessor = await store.createCard(board.id, a.id, { title: 'Préparation' });
+  const source = await store.createCard(board.id, a.id, { title: 'Fiche terminée', description: '# Markdown\n**À conserver**', points: 5, completed: true, startDate: '2026-11-05', dueDate: '2026-11-08', dependencies: [predecessor.id], flags: ['Design'], members: ['Mika'], checklist: [{ id: 'one', text: 'Déjà fait', done: true }, { id: 'two', text: 'À faire', done: false }] });
+  const following = await store.createCard(board.id, a.id, { title: 'Suite', dependencies: [source.id], points: 1 });
+  const decision = await store.createDecision(board.id, { title: 'Décision liée', links: [{ kind: 'card', target: source.id }] });
+  const copy = await store.duplicateCard(board.id, source.id, { expectedUpdatedAt: source.updatedAt });
+  assert.notEqual(copy.id, source.id); assert.equal(copy.title, 'Fiche terminée (copie)'); assert.equal(copy.completed, false);
+  assert.equal(copy.createdAt, copy.updatedAt); assert.ok(copy.createdAt > source.updatedAt);
+  for (const key of ['description', 'points', 'members', 'flags', 'startDate', 'dueDate', 'dependencies', 'columnId'] as const) assert.deepEqual(copy[key], source[key]);
+  assert.deepEqual(copy.checklist.map(({ text, done }) => ({ text, done })), source.checklist.map(({ text, done }) => ({ text, done })));
+  assert.equal(new Set([...source.checklist, ...copy.checklist].map(i => i.id)).size, 4);
+  const restored = await new Store(directory).getBoard(board.id);
+  assert.deepEqual(restored.columns[0].cards.map(c => c.id), [predecessor.id, source.id, copy.id, following.id]);
+  assert.deepEqual(restored.columns[0].cards.map(c => c.position), [0, 1, 2, 3]);
+  assert.deepEqual(await store.getCard(board.id, source.id), source);
+  assert.deepEqual((await store.getCard(board.id, following.id)).dependencies, [source.id]);
+  assert.deepEqual(restored.decisions[0].links, decision.links);
+  assert.deepEqual({ total: restored.pointHistory.at(-1)!.total, completed: restored.pointHistory.at(-1)!.completed }, { total: 11, completed: 5 });
+  await store.updateCard(board.id, copy.id, { description: 'Copie modifiée', checklist: copy.checklist.map(item => ({ ...item, done: false })) });
+  assert.deepEqual(await store.getCard(board.id, source.id), source);
+});
+test('duplicate supports bounded and custom titles and rejects stale or invalid requests without writes', async t => {
+  const { store, board, a, directory } = await fixture(t);
+  const source = await store.createCard(board.id, a.id, { title: 'A'.repeat(200) });
+  const copy = await store.duplicateCard(board.id, source.id);
+  assert.equal(copy.title.length, 200); assert.ok(copy.title.endsWith(' (copie)')); assert.deepEqual(copy.checklist, []);
+  const latest = await store.updateCard(board.id, source.id, { title: 'Nouvelle version' });
+  const filename = path.join(directory, `${board.id}.json`), before = await readFile(filename, 'utf8');
+  await assert.rejects(store.duplicateCard(board.id, source.id, { expectedUpdatedAt: source.updatedAt }), /changé/);
+  await assert.rejects(store.duplicateCard(board.id, source.id, { title: '' }));
+  await assert.rejects(store.duplicateCard(board.id, source.id, { title: 'X'.repeat(201) }));
+  await assert.rejects(store.duplicateCard(board.id, source.id, { completed: true }));
+  await assert.rejects(store.duplicateCard(board.id, 'missing'), /introuvable/);
+  assert.equal(await readFile(filename, 'utf8'), before);
+  const named = await store.duplicateCard(board.id, source.id, { title: 'Copie personnalisée', expectedUpdatedAt: latest.updatedAt });
+  assert.equal(named.title, 'Copie personnalisée');
+});
 test('parallel writes from independent stores do not lose changes', async t => {
   const { store, board, a, directory } = await fixture(t);
   await Promise.all(Array.from({ length: 20 }, (_, i) => new Store(directory).createCard(board.id, a.id, { title: `Card ${i}`, points: 1 })));

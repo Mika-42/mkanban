@@ -41,7 +41,7 @@ docker compose cp mkanban:/app/data/boards ./sauvegarde-boards
 - Plusieurs projets, chacun avec son nom, sa description et sa couleur. Cliquer sur « Mon espace », « Mes projets » ou le logo pour afficher tous les projets sous forme de tuiles, les rechercher et en ouvrir un. Cette vue reste ouverte après actualisation ; la suppression du projet courant y ramène également.
 - Colonnes déplaçables, renommables et colorables. Compteur de cartes et somme des story points, y compris les cartes terminées. Les filtres ne changent pas les totaux.
 - Cartes déplaçables au sein d’une colonne ou vers une autre. Utiliser la poignée en haut à droite ; une alternative de déplacement existe dans le détail de la carte. Les colonnes proposent aussi un menu gauche/droite. Le déplacement au clavier commence avec Espace sur une poignée, puis les flèches et Espace pour déposer, Échap pour annuler.
-- Clic droit sur une fiche : **Assigner**, **Scinder** ou **Supprimer**, directement depuis le Kanban. Le bouton « … » de la fiche ouvre le même menu sur mobile. Au clavier, utiliser ce bouton ou `Maj + F10` depuis la fiche, puis les flèches, Entrée et Échap.
+- Clic droit sur une fiche : **Assigner**, **Dupliquer**, **Scinder** ou **Supprimer**, directement depuis le Kanban. Le bouton « … » de la fiche ouvre le même menu sur mobile. Au clavier, utiliser ce bouton ou `Maj + F10` depuis la fiche, puis les flèches, Entrée et Échap.
 - Titre, description Markdown avec aperçu GFM, checklist éditable, date d’échéance, étiquettes/flags libres, membres et points entiers de 0 à 999. Les membres sont des noms, pas des comptes utilisateurs.
 - Case terminé/non terminé. Terminer une carte ne la déplace pas automatiquement.
 - Découpage : nouvelle carte adjacente, répartition des points, transfert des éléments de checklist choisis. Le total des points reste inchangé ; les autres propriétés et la description sont copiées. Enregistrer les modifications avant de scinder.
@@ -55,6 +55,10 @@ Les données sont enregistrées côté serveur à chaque action. Dans le détail
 L’assignation rapide permet de sélectionner plusieurs noms déjà utilisés dans le projet, d’en ajouter un ou de retirer tous les membres, sans ouvrir l’éditeur complet. Le découpage rapide reprend la répartition des points et le transfert des éléments de checklist. Ces deux actions refusent un brouillon obsolète si la fiche a été modifiée entre-temps. La suppression demande toujours confirmation et retire les liens vers la fiche supprimée.
 
 Dans les fenêtres d’édition, seul le contenu défile : le titre, la fermeture et les boutons d’action restent visibles. La barre de défilement interne suit le thème et ne déborde pas du cadre arrondi.
+
+**Dupliquer** est disponible dans le menu rapide (clic droit, bouton « … » ou clavier) et dans l’éditeur d’une fiche enregistrée. La copie est placée juste après l’originale dans la même colonne, avec le suffixe « (copie) ». Description Markdown, story points, membres, étiquettes, dates, prédécesseurs et checklist sont copiés ; les cases de checklist gardent leur état, tandis que la fiche est marquée non terminée. Les identifiants et les dates de création/modification sont renouvelés. La fiche originale, ses dépendants et ses liens depuis le journal des décisions restent inchangés. La duplication ajoute les points de la copie au périmètre du projet.
+
+L’outil MCP `duplicate_card` prend `boardId`, `cardId`, un `title` facultatif et `expectedUpdatedAt` pour refuser une source obsolète. L’équivalent HTTP est `POST /api/boards/{boardId}/cards/{cardId}/duplicate`, avec ces deux options dans le corps JSON. La copie et l’historique des points sont enregistrés ensemble dans le JSON du projet.
 
 ## Journal des décisions
 
@@ -70,6 +74,8 @@ L’onglet **Décisions** conserve la mémoire de chaque projet sous forme de bu
 | Remplacée | `superseded` | Gris | Historique, avec lien vers la successeure |
 
 Créer ou ouvrir une bulle pour renseigner le contexte, les alternatives, la décision retenue, la justification et les conséquences en Markdown, avec aperçu. Les types disponibles sont Technique, Fonctionnelle, Produit, Organisation et Autre. Des étiquettes libres et des liens vers les fiches du projet, d’autres décisions et des documents HTTP(S) complètent chaque entrée. Les fiches liées s’ouvrent directement depuis le journal et indiquent leur propre avancement : une décision validée ne signifie pas que son implémentation est terminée.
+
+Cliquer sur l’en-tête d’une bulle ou **Lire la décision** pour la déplier : les cinq sections s’affichent intégralement en Markdown, sans extrait tronqué. **Replier** retrouve la vue compacte (numéro, titre, type, état, dates, étiquettes et liens). Plusieurs décisions peuvent rester dépliées et leur contenu s’actualise avec les changements MCP. Le bouton **Modifier** ouvre séparément l’éditeur ; les décisions supprimées restent consultables en lecture seule.
 
 Le cycle nominal est `draft → discussing → proposed → accepted`. Une proposition peut être rejetée ; une décision rejetée peut être rouverte en réflexion. Des retours de « À valider » à « En réflexion » et de « En réflexion » à « Brouillon » sont possibles. Pour valider, documenter au minimum la décision retenue et sa justification. Une décision validée peut être remplacée en sélectionnant une autre décision validée et active du même projet. Les décisions remplacées conservent leur lien, même si leur successeure est ensuite remplacée ou supprimée.
 
@@ -90,6 +96,38 @@ Filtrer par état, type, texte (numéro ADR et contenu compris), étiquette, fic
 Ces outils prennent tous `boardId` (UUID du projet) ; les opérations sur une décision prennent aussi `decisionId`. La ressource `kanban://boards/{boardId}/decisions` renvoie tout le journal, suppressions comprises. `get_board` et la ressource du projet incluent également les décisions. Les réponses MCP précisent leur `authority` : `binding`, `contextual` ou `historical`, et la politique d’interprétation. Seules les décisions **validées et non supprimées** guident l’implémentation. L’assistant doit obtenir l’approbation explicite de l’utilisateur avant de valider une décision.
 
 L’application s’appelle **mkAgile** et présente des **projets** avec une vue **Kanban**. Pour conserver la compatibilité des clients existants et des données, les identifiants techniques `boardId`, les routes `/api/boards`, les outils `*_board`, les ressources `kanban://boards`, le dossier `data/boards` et le nom du service Docker restent inchangés.
+
+## Relations et analyse d’impact
+
+L’onglet **Relations** centralise les documents, les exigences et les éléments à réexaminer du projet. Documents et exigences possèdent un titre, un contenu Markdown avec aperçu, une adresse externe HTTP(S) facultative et des dates de création/modification. Ils peuvent être créés, modifiés, recherchés et filtrés par type. Leur suppression confirmée les masque sans effacer les relations ou les signalements historiques ; une option permet de les consulter en lecture seule.
+
+Dans l’éditeur d’une **fiche**, d’une **décision**, d’un **document** ou d’une **exigence**, la section **Relations et traçabilité** permet de créer et retirer des liens, puis d’ouvrir les éléments associés. Chaque lien est consultable dans les deux sens. Une fiche peut ainsi être liée à plusieurs décisions, documents et exigences. Quatre types sont proposés :
+
+- **Est associé à** (`relates_to`) : association symétrique.
+- **Met en œuvre** (`implements`), **Documente** (`documents`), **Valide** (`validates`) : relations orientées ; choisir le sens lors de la création.
+
+Les relations restent distinctes des dépendances du Gantt et ne changent ni la validation d’une décision ni l’avancement d’une fiche. Les liens déjà enregistrés dans les décisions sont présentés dans les deux sens, sans migration ni réécriture de l’historique ; ils restent modifiables dans la liste des liens de leur décision. Les liens directs vers des documents externes HTTP(S) sont aussi acceptés. Les liens vers soi-même, les doublons et les références à un autre projet ou à un élément supprimé sont refusés.
+
+### Impact et réexamen
+
+Choisir une décision dans **Analyse d’impact** pour retrouver les éléments directement ou indirectement concernés. Les résultats montrent le chemin et le nombre d’étapes. Les relations génériques et les liens historiques des décisions se parcourent dans les deux sens ; les dépendances du Gantt propagent l’impact uniquement vers les fiches suivantes. Les cycles de relations sont supportés. Le lien « Remplacée par » n’est pas parcouru : les seules relations explicites de la nouvelle décision ne sont pas automatiquement considérées comme affectées.
+
+Lorsqu’une décision validée est **remplacée**, des signalements « À réexaminer » sont créés pour les fiches, documents, exigences et adresses externes atteints. Ils sont enregistrés dans la même écriture JSON que le remplacement. Les autres décisions rencontrées apparaissent dans l’analyse, sans devenir des tâches de revue. Les éléments concernés ne sont pas modifiés automatiquement.
+
+Un signalement conserve la décision d’origine, sa remplaçante, le titre de l’élément, le chemin et la date de détection. Cliquer sur **Réexaminer** pour ajouter une note et marquer la revue terminée ; elle peut être rouverte. Cette action ne termine pas la fiche Kanban. Les notes et signalements restent disponibles après suppression d’un lien ou d’une fiche. Le bouton **Actualiser les éléments à réexaminer** d’une décision remplacée ajoute les nouveaux éléments atteints sans réinitialiser les revues déjà effectuées.
+
+Les champs `knowledge`, `relations` et `impactReviews` sont conservés dans le même JSON que les fiches et décisions. Les projets plus anciens utilisent des listes vides par défaut. L’export JSON sauvegarde l’ensemble. Une duplication de fiche ne recopie pas ses relations de traçabilité ni ses signalements ; les liens de l’originale sont conservés.
+
+### MCP et API des relations
+
+- `list_knowledge`, `create_knowledge`, `update_knowledge`, `delete_knowledge` : gérer les documents/exigences. La création prend `kind: "document" | "requirement"`, `title`, `content` et `url` (ou `null`). Les mises à jour prennent `itemId` et un patch ; `expectedUpdatedAt` protège modifications et suppressions. `list_knowledge` accepte `includeDeleted`.
+- `list_relations` : récupérer tous les liens ou ceux d’un `entity: { "kind": "card" | "decision" | "document" | "requirement" | "url", "id": "<UUID ou URL>" }`. Pour un élément, les résultats comprennent le sens, l’autre élément et son titre. `origin: "decision-link"` indique un lien historique à modifier via `update_decision`.
+- `create_relation` : fournir `source`, `target` et `type` ; `delete_relation` retire un lien explicite par `relationId` sans supprimer les éléments liés.
+- `analyze_impact` : fournir `decisionId`. Par défaut, l’analyse ne modifie rien. Pour une décision remplacée, `recordReviews: true` ajoute les signalements manquants.
+- `list_impact_reviews` : consulter les signalements avec `status: "pending" | "reviewed" | "all"`.
+- `review_impact` : fournir `reviewId`, `reviewed` (vrai/faux), une `note` facultative et `expectedUpdatedAt` après lecture. Une note omise conserve la note existante.
+
+Tous ces outils prennent `boardId`. L’API propose les équivalents sous `/api/boards/{boardId}` : `GET/POST /knowledge`, `PATCH/DELETE /knowledge/{itemId}`, `GET/POST /relations`, `DELETE /relations/{relationId}`, `GET/POST /decisions/{decisionId}/impact`, `GET /impact-reviews` et `PATCH /impact-reviews/{reviewId}`. Le `GET /relations` accepte `kind` et `id` pour la consultation bidirectionnelle ; `GET /knowledge?includeDeleted=true` inclut les éléments masqués. Les ressources MCP et `get_board` incluent aussi ces collections.
 
 ## Gantt et dépendances
 
@@ -185,15 +223,18 @@ Le serveur web n’est pas nécessaire pour stdio. Quand les deux sont utilisés
 
 ### Outils et ressources
 
-23 outils :
+34 outils :
 
 | Objet | Outils |
 | --- | --- |
 | Projets | `list_boards`, `get_board`, `create_board`, `update_board`, `delete_board` |
 | Décisions | `list_decisions`, `get_decision`, `create_decision`, `update_decision`, `delete_decision` |
 | Colonnes | `create_column`, `update_column`, `move_column`, `delete_column` |
-| Cartes | `get_card`, `create_card`, `update_card`, `move_card`, `delete_card`, `split_card` |
+| Cartes | `get_card`, `create_card`, `update_card`, `move_card`, `delete_card`, `split_card`, `duplicate_card` |
 | Planning | `get_gantt`, `update_schedule`, `auto_schedule` |
+| Documentation et exigences | `list_knowledge`, `create_knowledge`, `update_knowledge`, `delete_knowledge` |
+| Relations | `list_relations`, `create_relation`, `delete_relation` |
+| Impact | `analyze_impact`, `list_impact_reviews`, `review_impact` |
 
 Ressources : `kanban://boards`, `kanban://boards/{boardId}` et `kanban://boards/{boardId}/decisions`. `get_board` expose aussi les compteurs, les points par colonne et le journal avec la portée des décisions pour l’IA.
 

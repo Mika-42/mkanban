@@ -5,6 +5,7 @@ import { createMcpServer } from './mcp.js';
 import { ganttQuerySchema, moveSchema } from './schema.js';
 import { Store, StoreError } from './store.js';
 import { ganttCsv, ganttRange, ganttSvg, PlanningError } from '../shared/planning.js';
+import { entityRefSchema } from './schema.js';
 
 export function createApp(store: Store, options: { allowedHosts?: string[] } = {}) {
   const app = express();
@@ -25,6 +26,23 @@ export function createApp(store: Store, options: { allowedHosts?: string[] } = {
   app.get('/api/boards/:boardId', async (req, res) => res.json(await store.getBoard(req.params.boardId)));
   app.patch('/api/boards/:boardId', async (req, res) => res.json(await store.updateBoard(req.params.boardId, req.body)));
   app.delete('/api/boards/:boardId', async (req, res) => res.json(await store.deleteBoard(req.params.boardId)));
+  app.get('/api/boards/:boardId/knowledge', async (req, res) => res.json(await store.listKnowledge(req.params.boardId, z.enum(['true', 'false']).default('false').parse(req.query.includeDeleted) === 'true')));
+  app.post('/api/boards/:boardId/knowledge', async (req, res) => res.status(201).json(await store.createKnowledge(req.params.boardId, req.body)));
+  app.patch('/api/boards/:boardId/knowledge/:itemId', async (req, res) => {
+    const { expectedUpdatedAt, ...patch } = req.body;
+    res.json(await store.updateKnowledge(req.params.boardId, req.params.itemId, patch, z.string().optional().parse(expectedUpdatedAt)));
+  });
+  app.delete('/api/boards/:boardId/knowledge/:itemId', async (req, res) => {
+    const options = z.object({ expectedUpdatedAt: z.string().optional() }).strict().parse(req.body ?? {});
+    res.json(await store.deleteKnowledge(req.params.boardId, req.params.itemId, options.expectedUpdatedAt));
+  });
+  app.get('/api/boards/:boardId/relations', async (req, res) => res.json(await store.listRelations(req.params.boardId, req.query.kind === undefined && req.query.id === undefined ? undefined : entityRefSchema.parse({ kind: req.query.kind, id: req.query.id }))));
+  app.post('/api/boards/:boardId/relations', async (req, res) => res.status(201).json(await store.createRelation(req.params.boardId, req.body)));
+  app.delete('/api/boards/:boardId/relations/:relationId', async (req, res) => res.json(await store.deleteRelation(req.params.boardId, req.params.relationId)));
+  app.get('/api/boards/:boardId/decisions/:decisionId/impact', async (req, res) => res.json(await store.analyzeDecisionImpact(req.params.boardId, req.params.decisionId)));
+  app.post('/api/boards/:boardId/decisions/:decisionId/impact', async (req, res) => res.json(await store.analyzeDecisionImpact(req.params.boardId, req.params.decisionId, true)));
+  app.get('/api/boards/:boardId/impact-reviews', async (req, res) => res.json(await store.listImpactReviews(req.params.boardId, z.enum(['pending', 'reviewed', 'all']).default('pending').parse(req.query.status))));
+  app.patch('/api/boards/:boardId/impact-reviews/:reviewId', async (req, res) => res.json(await store.reviewImpact(req.params.boardId, req.params.reviewId, req.body)));
   app.get('/api/boards/:boardId/decisions', async (req, res) => {
     const query = { ...req.query };
     for (const key of ['statuses', 'types']) if (typeof query[key] === 'string') query[key] = [query[key] as string];
@@ -64,6 +82,7 @@ export function createApp(store: Store, options: { allowedHosts?: string[] } = {
   });
   app.delete('/api/boards/:boardId/cards/:cardId', async (req, res) => res.json(await store.deleteCard(req.params.boardId, req.params.cardId)));
   app.post('/api/boards/:boardId/cards/:cardId/split', async (req, res) => res.json(await store.splitCard(req.params.boardId, req.params.cardId, req.body)));
+  app.post('/api/boards/:boardId/cards/:cardId/duplicate', async (req, res) => res.status(201).json(await store.duplicateCard(req.params.boardId, req.params.cardId, req.body)));
   app.post('/mcp', async (req, res) => {
     const server = createMcpServer(store);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

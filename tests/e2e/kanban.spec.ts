@@ -439,6 +439,64 @@ test('context actions split points and checklist and confirm deletion without op
   await request.delete(`/api/boards/${board.id}`);
 });
 
+test('quick duplicate copies a card without opening it and works from the mobile action menu', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  const predecessor = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Prédécesseur' } })).json();
+  const source = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'À dupliquer', description: '# Description\n**Indépendante**', points: 8, completed: true, members: ['Mika'], flags: ['Design'], startDate: '2026-11-05', dueDate: '2026-11-08', dependencies: [predecessor.id], checklist: [{ id: 'one', text: 'Déjà fait', done: true }, { id: 'two', text: 'À faire', done: false }] } })).json();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'À dupliquer', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Dupliquer', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'À dupliquer (copie)', exact: true })).toBeVisible();
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'À dupliquer', exact: true })).toBeFocused();
+  let cards = (await read()).columns[0].cards; const copy = cards[2];
+  expect(cards.map((c: { id: string }) => c.id)).toEqual([predecessor.id, source.id, copy.id]);
+  expect(cards[1]).toEqual(source); expect(copy.completed).toBe(false); expect(copy.points).toBe(8);
+  expect(copy.description).toBe(source.description); expect(copy.members).toEqual(source.members); expect(copy.flags).toEqual(source.flags);
+  expect(copy.startDate).toBe(source.startDate); expect(copy.dueDate).toBe(source.dueDate); expect(copy.dependencies).toEqual(source.dependencies);
+  expect(copy.checklist.map((i: { done: boolean }) => i.done)).toEqual([true, false]); expect(copy.checklist[0].id).not.toBe('one');
+  const column = page.getByRole('region', { name: 'Colonne À faire', exact: true });
+  await expect(column.locator('.column-count')).toHaveText('3'); await expect(column.locator('.column-points')).toHaveText('16');
+  await page.setViewportSize({ width: 390, height: 700 });
+  await page.getByRole('button', { name: 'Actions de À dupliquer', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Dupliquer', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'À dupliquer (copie)', exact: true })).toHaveCount(2);
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Actions de À dupliquer', exact: true })).toBeFocused();
+  cards = (await read()).columns[0].cards; expect(cards).toHaveLength(4); expect(new Set(cards.map((c: { id: string }) => c.id)).size).toBe(4);
+  await request.delete(`/api/boards/${board.id}`);
+});
+
+test('editor duplicates saved cards and a concurrent source edit prevents a quick duplicate', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  const card = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Originale', points: 3 } })).json();
+  await page.goto('/'); await page.getByRole('button', { name: 'Originale', exact: true }).click();
+  const duplicate = page.getByRole('button', { name: 'Dupliquer', exact: true });
+  await expect(duplicate).toBeEnabled();
+  await page.getByLabel('Titre de la carte', { exact: true }).fill('Brouillon'); await expect(duplicate).toBeDisabled();
+  await page.getByLabel('Titre de la carte', { exact: true }).fill('Originale'); await expect(duplicate).toBeEnabled();
+  await duplicate.click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Originale (copie)', exact: true })).toBeVisible();
+  const routePattern = `**/cards/${card.id}/duplicate`;
+  await page.route(routePattern, async route => {
+    await request.patch(`/api/boards/${board.id}/cards/${card.id}`, { data: { title: 'Modifiée entre-temps' } });
+    await route.continue();
+  });
+  await page.getByRole('button', { name: 'Originale', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Dupliquer', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Cette carte a changé');
+  expect((await read()).columns[0].cards).toHaveLength(2);
+  await page.unroute(routePattern);
+  await expect(page.getByRole('button', { name: 'Modifiée entre-temps', exact: true })).toBeVisible({ timeout: 8000 });
+  await page.getByRole('button', { name: 'Modifiée entre-temps', exact: true }).focus();
+  await page.keyboard.press('Shift+F10'); await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'Dupliquer', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('button', { name: 'Modifiée entre-temps (copie)', exact: true })).toBeVisible();
+  expect((await read()).columns[0].cards).toHaveLength(3);
+  await request.delete(`/api/boards/${board.id}`);
+});
+
 test('context menu supports the keyboard, stays in the viewport and is reachable from a mobile action button', async ({ page, request }) => {
   const { board, a } = await fixture(page, request);
   await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Contextuelle' } });

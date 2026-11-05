@@ -8,5 +8,6 @@ import './gantt.css';
 import './card-actions.css';
 import './dialogs.css';
 import './decisions.css';
+import './traceability.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

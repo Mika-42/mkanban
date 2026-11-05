@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, BookOpen, Cable, CalendarRange, ChartNoAxesCombined, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
-import type { Board, BoardSummary, Card } from '../../server/schema';
+import { ArrowDownToLine, ArrowRight, BookOpen, Cable, CalendarRange, ChartNoAxesCombined, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, GitBranch, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import type { Board, BoardSummary, Card, Decision, EntityRef, KnowledgeItem } from '../../server/schema';
 import { api, createBoard } from './api';
 import { Avatar, Confirm, McpDialog, Modal, Spinner } from './components';
 import { BoardView } from './BoardView';
@@ -9,6 +9,11 @@ import { BoardsOverview } from './BoardsOverview';
 import { BoardCharts } from './BoardCharts';
 import { BoardGantt } from './BoardGantt';
 import { BoardDecisions } from './BoardDecisions';
+import { BoardTraceability } from './BoardTraceability';
+import { DecisionEditor } from './DecisionEditor';
+import { KnowledgeEditor } from './KnowledgeEditor';
+import { entityKey } from '../../shared/traceability';
+import type { EntityNavigation } from './EntityRelations';
 
 export function App() {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
@@ -21,8 +26,9 @@ export function App() {
   const [status, setStatus] = useState('all');
   const [flag, setFlag] = useState('');
   const [filters, setFilters] = useState(false);
-  const [view, setView] = useState<'table' | 'charts' | 'gantt' | 'decisions'>('table');
+  const [view, setView] = useState<'table' | 'charts' | 'gantt' | 'decisions' | 'relations'>('table');
   const [card, setCard] = useState<Card | null>(null);
+  const [entity, setEntity] = useState<EntityRef | null>(null);
   const [mcp, setMcp] = useState(false);
   const [newBoard, setNewBoard] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -46,7 +52,7 @@ export function App() {
   useEffect(() => { refresh().catch(e => { setError(e.message); setLoaded(true); }); }, [refresh]);
   useEffect(() => {
     if (selected) localStorage.setItem('mkanban.board', selected); else localStorage.removeItem('mkanban.board');
-    setSearch(''); setMember(''); setStatus('all'); setFlag(''); setCard(null); setSidebar(false); setView('table');
+    setSearch(''); setMember(''); setStatus('all'); setFlag(''); setCard(null); setEntity(null); setSidebar(false); setView('table');
     refresh().catch(e => setError(e.message));
   }, [selected, refresh]);
   // Reload JSON-backed state, including edits from separate MCP stdio processes.
@@ -60,9 +66,10 @@ export function App() {
   }, [refresh]);
   const run = async (fn: () => Promise<unknown>) => { setSaving(true); setError(''); try { await fn(); await refresh(); } catch (e) { setError((e as Error).message); } finally { setSaving(false); } };
   const choose = (id: string) => { selectedRef.current = id; setBoard(null); setSelected(id); };
-  const showOverview = () => { selectedRef.current = null; setSelected(null); setBoard(null); setCard(null); setSettings(false); setSidebar(false); };
+  const showOverview = () => { selectedRef.current = null; setSelected(null); setBoard(null); setCard(null); setEntity(null); setSettings(false); setSidebar(false); };
   const created = async (id: string) => { selectedRef.current = id; setSelected(id); await refresh(); setNewBoard(false); };
   const cards = board?.columns.flatMap(c => c.cards) || [];
+  const navigateEntity: EntityNavigation = ref => { if (ref.kind === 'card') { const next = cards.find(c => c.id === ref.id); if (next) { setEntity(null); setCard(structuredClone(next)); } } else if (ref.kind !== 'url') { setCard(null); setEntity(ref); } };
   const members = [...new Set(cards.flatMap(c => c.members))].sort();
   const flags = [...new Set(cards.flatMap(c => c.flags))].sort();
   const completed = cards.filter(c => c.completed).length;
@@ -96,15 +103,16 @@ export function App() {
         </section>
         <div className="board-toolbar"><div className="board-tabs" role="tablist" aria-label="Vues du projet" onKeyDown={e => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-          e.preventDefault(); const tabs = ['table', 'charts', 'gantt', 'decisions'] as const; const next = e.key === 'Home' ? 'table' : e.key === 'End' ? 'decisions' : tabs[(tabs.indexOf(view) + (e.key === 'ArrowLeft' ? tabs.length - 1 : 1)) % tabs.length];
+          e.preventDefault(); const tabs = ['table', 'charts', 'gantt', 'decisions', 'relations'] as const; const next = e.key === 'Home' ? 'table' : e.key === 'End' ? 'relations' : tabs[(tabs.indexOf(view) + (e.key === 'ArrowLeft' ? tabs.length - 1 : 1)) % tabs.length];
           setView(next); document.getElementById(next === 'table' ? 'board-tab' : `${next}-tab`)?.focus();
-        }}><button id="board-tab" role="tab" aria-controls="board-panel" aria-selected={view === 'table'} tabIndex={view === 'table' ? 0 : -1} className={`view-tab ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}><LayoutGrid size={16} />Kanban<span>{board.columns.length}</span></button><button id="charts-tab" role="tab" aria-controls="charts-panel" aria-selected={view === 'charts'} tabIndex={view === 'charts' ? 0 : -1} className={`view-tab ${view === 'charts' ? 'active' : ''}`} onClick={() => setView('charts')}><ChartNoAxesCombined size={17} />Graphiques</button><button id="gantt-tab" role="tab" aria-controls="gantt-panel" aria-selected={view === 'gantt'} tabIndex={view === 'gantt' ? 0 : -1} className={`view-tab ${view === 'gantt' ? 'active' : ''}`} onClick={() => setView('gantt')}><CalendarRange size={17} />Gantt</button><button id="decisions-tab" role="tab" aria-controls="decisions-panel" aria-selected={view === 'decisions'} tabIndex={view === 'decisions' ? 0 : -1} className={`view-tab ${view === 'decisions' ? 'active' : ''}`} onClick={() => setView('decisions')}><BookOpen size={17} />Décisions</button></div>{view === 'table' ? <div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le projet JSON" aria-label="Exporter le projet JSON" onClick={download}><ArrowDownToLine size={18} /></button></div> : <span className="chart-toolbar-note">{view === 'gantt' ? 'Planning et dépendances' : view === 'decisions' ? 'Journal des décisions' : 'Suivi en story points'}</span>}</div>
+        }}><button id="board-tab" role="tab" aria-controls="board-panel" aria-selected={view === 'table'} tabIndex={view === 'table' ? 0 : -1} className={`view-tab ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}><LayoutGrid size={16} />Kanban<span>{board.columns.length}</span></button><button id="charts-tab" role="tab" aria-controls="charts-panel" aria-selected={view === 'charts'} tabIndex={view === 'charts' ? 0 : -1} className={`view-tab ${view === 'charts' ? 'active' : ''}`} onClick={() => setView('charts')}><ChartNoAxesCombined size={17} />Graphiques</button><button id="gantt-tab" role="tab" aria-controls="gantt-panel" aria-selected={view === 'gantt'} tabIndex={view === 'gantt' ? 0 : -1} className={`view-tab ${view === 'gantt' ? 'active' : ''}`} onClick={() => setView('gantt')}><CalendarRange size={17} />Gantt</button><button id="decisions-tab" role="tab" aria-controls="decisions-panel" aria-selected={view === 'decisions'} tabIndex={view === 'decisions' ? 0 : -1} className={`view-tab ${view === 'decisions' ? 'active' : ''}`} onClick={() => setView('decisions')}><BookOpen size={17} />Décisions</button><button id="relations-tab" role="tab" aria-controls="relations-panel" aria-selected={view === 'relations'} tabIndex={view === 'relations' ? 0 : -1} className={`view-tab ${view === 'relations' ? 'active' : ''}`} onClick={() => setView('relations')}><GitBranch size={17} />Relations</button></div>{view === 'table' ? <div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le projet JSON" aria-label="Exporter le projet JSON" onClick={download}><ArrowDownToLine size={18} /></button></div> : <span className="chart-toolbar-note">{view === 'gantt' ? 'Planning et dépendances' : view === 'decisions' ? 'Journal des décisions' : view === 'relations' ? 'Traçabilité et impact' : 'Suivi en story points'}</span>}</div>
         {view === 'table' && filters && <div className="filter-panel"><label>Membre<select value={member} onChange={e => setMember(e.target.value)}><option value="">Tous les membres</option>{members.map(m => <option key={m}>{m}</option>)}</select></label><label>Étiquette<select value={flag} onChange={e => setFlag(e.target.value)}><option value="">Toutes les étiquettes</option>{flags.map(f => <option key={f}>{f}</option>)}</select></label><label>État<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">Toutes les cartes</option><option value="active">Non terminées</option><option value="completed">Terminées</option></select></label><button className="text-button" onClick={() => { setMember(''); setFlag(''); setStatus('all'); }}>Réinitialiser</button><span className="hint">Les totaux des colonnes incluent toutes les cartes.</span></div>}
-        {view === 'table' ? <div className="board-panel" role="tabpanel" id="board-panel" aria-labelledby="board-tab"><BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} /></div> : view === 'charts' ? <BoardCharts key={board.id} board={board} /> : view === 'gantt' ? <BoardGantt key={board.id} board={board} onCard={setCard} refresh={refresh} /> : <BoardDecisions key={board.id} board={board} refresh={refresh} onCard={setCard} />}
+        {view === 'table' ? <div className="board-panel" role="tabpanel" id="board-panel" aria-labelledby="board-tab"><BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} /></div> : view === 'charts' ? <BoardCharts key={board.id} board={board} /> : view === 'gantt' ? <BoardGantt key={board.id} board={board} onCard={setCard} refresh={refresh} /> : view === 'decisions' ? <BoardDecisions key={board.id} board={board} refresh={refresh} onCard={setCard} onNavigate={navigateEntity} /> : <BoardTraceability key={board.id} board={board} refresh={refresh} onNavigate={navigateEntity} />}
         <footer className="board-footer"><span><span className="status-dot" />{saving ? 'Enregistrement…' : 'Enregistré localement'}<span className="footer-file"><FileJson size={13} />1 projet = 1 fichier JSON</span></span><span>Faites glisser vos idées. Faites avancer vos projets.<Leaf size={13} /></span></footer>
       </>}
     </main>
-    {card && board && <CardEditor key={card.id} card={card} board={board} onClose={() => setCard(null)} onSaved={refresh} />}
+    {card && board && <CardEditor key={card.id} card={card} board={board} onClose={() => setCard(null)} onSaved={refresh} onNavigate={navigateEntity} />}
+    {entity && board && <TraceEntityEditor key={entityKey(entity)} entity={entity} board={board} onClose={() => setEntity(null)} onSaved={refresh} onNavigate={navigateEntity} />}
     {mcp && <McpDialog onClose={() => setMcp(false)} />}
     {newBoard && <BoardForm onClose={() => setNewBoard(false)} onCreated={created} />}
     {settings && board && <BoardSettings board={board} onClose={() => setSettings(false)} refresh={refresh} download={download} />}
@@ -122,4 +130,10 @@ function BoardForm({ onClose, onCreated }: { onClose: () => void; onCreated: (id
 function BoardSettings({ board, onClose, refresh, download }: { board: Board; onClose: () => void; refresh: () => Promise<void>; download: () => void }) {
   const [title, setTitle] = useState(board.title); const [description, setDescription] = useState(board.description); const [color, setColor] = useState(board.color); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [confirm, setConfirm] = useState(false);
   return <><Modal title="Paramètres du projet" onClose={onClose}><form onSubmit={async e => { e.preventDefault(); setBusy(true); try { await api(`/boards/${board.id}`, 'PATCH', { title, description, color }); await refresh(); onClose(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><div className="modal-body form-stack"><label htmlFor="settings-title">Nom du projet</label><input id="settings-title" autoFocus required maxLength={200} value={title} onChange={e => setTitle(e.target.value)} /><label htmlFor="settings-description">Description</label><textarea id="settings-description" rows={3} maxLength={1000} value={description} onChange={e => setDescription(e.target.value)} /><label>Couleur du projet</label><div className="color-options">{(['violet', 'blue', 'green', 'rose'] as const).map(c => <button key={c} type="button" aria-label={`Couleur ${c}`} aria-pressed={color === c} className={`color-option ${c} ${color === c ? 'active' : ''}`} onClick={() => setColor(c)}>{color === c && <Check size={15} />}</button>)}</div><div className="storage-info"><FileJson size={19} /><div><strong>Un projet, un fichier JSON</strong><p>data/boards/{board.id}.json</p></div></div><button type="button" className="button secondary" onClick={download}><ArrowDownToLine size={16} />Exporter une copie JSON</button><button type="button" className="button quiet danger-text" onClick={() => setConfirm(true)}><Trash2 size={16} />Supprimer le projet</button>{error && <div className="form-error" role="alert">{error}</div>}</div><footer className="modal-footer"><button type="button" className="button secondary" disabled={busy} onClick={onClose}>Annuler</button><button className="button primary" disabled={busy || !title.trim()}>{busy && <Spinner />}Enregistrer</button></footer></form></Modal>{confirm && <Confirm title="Supprimer tout le projet ?" description={`« ${board.title} », ses colonnes, toutes ses cartes et son journal de décisions seront définitivement supprimés. Exportez une copie JSON si vous souhaitez les conserver.`} busy={busy} onClose={() => setConfirm(false)} onConfirm={async () => { setBusy(true); try { await api(`/boards/${board.id}`, 'DELETE'); await refresh(); onClose(); } catch (e) { setError((e as Error).message); setConfirm(false); } finally { setBusy(false); } }} />}</>;
+}
+
+function TraceEntityEditor({ entity, board, onClose, onSaved, onNavigate }: { entity: EntityRef; board: Board; onClose: () => void; onSaved: () => Promise<void>; onNavigate: EntityNavigation }) {
+  const [snapshot] = useState<Decision | KnowledgeItem | undefined>(() => structuredClone(entity.kind === 'decision' ? board.decisions.find(d => d.id === entity.id) : board.knowledge.find(k => k.id === entity.id && k.kind === entity.kind)));
+  if (!snapshot) return null;
+  return entity.kind === 'decision' ? <DecisionEditor decision={snapshot as Decision} board={board} onClose={onClose} onSaved={onSaved} onNavigate={onNavigate} /> : <KnowledgeEditor item={snapshot as KnowledgeItem} kind={(snapshot as KnowledgeItem).kind} board={board} onClose={onClose} onSaved={onSaved} onNavigate={onNavigate} />;
 }

@@ -1,0 +1,110 @@
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+async function fixture(page: Page, request: APIRequestContext) {
+  const create = async (path: string, data: unknown) => { const response = await request.post(`/api${path}`, { data }); expect(response.ok()).toBeTruthy(); return response.json(); };
+  const project = await create('/boards', { title: `Traçabilité ${crypto.randomUUID().slice(0, 8)}` });
+  const base = `/boards/${project.id}`;
+  const column = await create(`${base}/columns`, { title: 'À faire' });
+  const card = await create(`${base}/columns/${column.id}/cards`, { title: 'Implémenter le stockage', points: 5 });
+  const decision = await create(`${base}/decisions`, { title: 'Architecture initiale', status: 'accepted', outcome: 'Solution A', rationale: 'Simple', links: [{ kind: 'card', target: card.id }] });
+  await page.addInitScript(id => localStorage.setItem('mkanban.board', id), project.id);
+  return { project, base, column, card, decision, create, read: async () => (await request.get(`/api${base}`)).json() };
+}
+async function addRelation(page: Page, kind: string, id: string, type = 'relates_to') {
+  const panel = page.getByRole('region', { name: 'Relations de cet élément', exact: true });
+  await panel.getByLabel('Élément à relier', { exact: true }).selectOption(JSON.stringify([kind, id]));
+  await panel.getByLabel('Type de relation', { exact: true }).selectOption(type);
+  await panel.getByRole('button', { name: 'Ajouter la relation', exact: true }).click();
+  await expect(panel.getByLabel('Élément à relier', { exact: true })).toHaveValue('');
+}
+test('documents and requirements can be created and linked, with navigation in both directions', async ({ page, request }) => {
+  const { card, decision, read } = await fixture(page, request);
+  const errors: string[] = []; page.on('pageerror', e => { if (e.message !== 'WebSocket closed without opened.') errors.push(e.message); });
+  await page.goto('/'); await page.getByRole('tab', { name: 'Relations', exact: true }).click();
+  await page.getByRole('button', { name: 'Nouveau document', exact: true }).click();
+  await page.getByLabel('Titre du document', { exact: true }).fill('Dossier de conception');
+  await page.getByLabel('Adresse externe (facultative)', { exact: true }).fill('https://example.org/conception');
+  await page.getByLabel('Contenu Markdown', { exact: true }).fill('## Architecture\n\n**Conception** détaillée.');
+  await page.getByRole('button', { name: 'Aperçu', exact: true }).click(); await expect(page.getByRole('heading', { name: 'Architecture', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Créer le document', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Nouvelle exigence', exact: true }).click();
+  await page.getByLabel('Titre de l’exigence', { exact: true }).fill('Fonctionner localement');
+  await page.getByLabel('Contenu Markdown', { exact: true }).fill('Les données restent sur la machine.');
+  await page.getByRole('button', { name: 'Créer l’exigence', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  const project = await read(), document = project.knowledge.find((k: { kind: string }) => k.kind === 'document'), requirement = project.knowledge.find((k: { kind: string }) => k.kind === 'requirement');
+  await page.getByRole('tab', { name: /^Kanban/ }).click(); await page.getByRole('button', { name: card.title, exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Relations de cet élément', exact: true });
+  await expect(panel.getByRole('button', { name: /Décision · ADR-001 · Architecture initiale/ })).toBeVisible();
+  await addRelation(page, 'document', document.id, 'documents');
+  await panel.getByRole('button', { name: 'Document · Dossier de conception', exact: true }).click();
+  await expect(page.getByLabel('Titre du document', { exact: true })).toHaveValue(document.title);
+  await expect(panel.getByRole('button', { name: `Fiche · ${card.title}`, exact: true })).toBeVisible();
+  await addRelation(page, 'requirement', requirement.id, 'validates');
+  await addRelation(page, 'decision', decision.id);
+  await panel.getByRole('button', { name: /Décision · ADR-001 · Architecture initiale/ }).click();
+  await expect(page.getByLabel('Titre de la décision', { exact: true })).toHaveValue(decision.title);
+  await expect(panel.getByRole('button', { name: 'Document · Dossier de conception', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: `Fiche · ${card.title}`, exact: true }).click();
+  await expect(page.getByLabel('Titre de la carte', { exact: true })).toHaveValue(card.title);
+  await expect(panel.getByRole('button', { name: 'Document · Dossier de conception', exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Retirer la relation avec Dossier de conception', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Document · Dossier de conception', exact: true })).toHaveCount(0);
+  expect((await read()).relations).toHaveLength(2); expect(errors).toEqual([]);
+});
+test('replacing a decision flags transitive impact and review notes do not complete tasks', async ({ page, request }) => {
+  const { base, card, decision, create, read } = await fixture(page, request);
+  const document = await create(`${base}/knowledge`, { kind: 'document', title: 'Conception à revoir' });
+  const requirement = await create(`${base}/knowledge`, { kind: 'requirement', title: 'Exigence à vérifier' });
+  await create(`${base}/relations`, { source: { kind: 'card', id: card.id }, target: { kind: 'document', id: document.id } });
+  await create(`${base}/relations`, { source: { kind: 'document', id: document.id }, target: { kind: 'requirement', id: requirement.id }, type: 'validates' });
+  const replacement = await create(`${base}/decisions`, { title: 'Architecture révisée', status: 'accepted', outcome: 'B', rationale: 'Nouveau contexte' });
+  await page.goto('/'); await page.getByRole('tab', { name: 'Décisions', exact: true }).click();
+  await page.getByRole('button', { name: /^Ouvrir ADR-001/ }).click();
+  await page.getByLabel('État', { exact: true }).selectOption('superseded');
+  await page.getByLabel('Décision qui remplace celle-ci', { exact: true }).selectOption(replacement.id);
+  await page.getByRole('button', { name: 'Enregistrer la décision', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Relations', exact: true }).click();
+  await expect(page.locator('.trace-summary')).toContainText('3 à réexaminer');
+  await page.getByLabel('Décision à analyser', { exact: true }).selectOption(decision.id);
+  await expect(page.locator('.trace-analysis-list')).toContainText('Exigence à vérifier');
+  await expect(page.locator('.trace-analysis-list')).toContainText('3 étapes');
+  const requirementReview = page.locator('.impact-list>li').filter({ hasText: 'Exigence à vérifier' });
+  await requirementReview.getByRole('button', { name: 'Réexaminer', exact: true }).click();
+  await page.getByLabel('Note de réexamen', { exact: true }).fill('Exigence toujours conforme à la nouvelle décision.');
+  await page.getByRole('button', { name: 'Enregistrer le réexamen', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.locator('.trace-summary')).toContainText('2 à réexaminer');
+  await page.getByLabel('Filtrer les réexamens', { exact: true }).selectOption('reviewed');
+  await expect(page.locator('.impact-list')).toContainText('Exigence toujours conforme');
+  await page.getByRole('button', { name: 'Actualiser les éléments à réexaminer', exact: true }).click();
+  await expect(page.locator('.trace-summary')).toContainText('2 à réexaminer');
+  const project = await read(); expect(project.columns[0].cards[0].completed).toBe(false); expect(project.columns[0].cards[0].points).toBe(5);
+  await page.reload(); await page.getByRole('tab', { name: 'Relations', exact: true }).click();
+  await page.getByLabel('Filtrer les réexamens', { exact: true }).selectOption('reviewed'); await expect(page.locator('.impact-list')).toContainText('Exigence toujours conforme');
+});
+test('mobile navigation, live MCP relations and stale knowledge edits remain safe', async ({ page, request }) => {
+  const { base, project, card, create, read } = await fixture(page, request);
+  const document = await create(`${base}/knowledge`, { kind: 'document', title: 'Document partagé', content: 'Version initiale' });
+  await page.setViewportSize({ width: 390, height: 700 }); await page.goto('/');
+  await page.getByRole('tab', { name: /^Kanban/ }).focus(); await page.keyboard.press('End'); await expect(page.getByRole('tab', { name: 'Relations', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: /Document.*Document partagé/ }).click();
+  await page.getByLabel('Contenu Markdown', { exact: true }).fill('Brouillon local');
+  const client = new Client({ name: 'traceability-browser', version: '1' }); await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:3100/mcp')));
+  try {
+    await client.callTool({ name: 'update_knowledge', arguments: { boardId: project.id, itemId: document.id, content: 'Version IA' } });
+    await client.callTool({ name: 'create_relation', arguments: { boardId: project.id, source: { kind: 'document', id: document.id }, target: { kind: 'card', id: card.id }, type: 'documents' } });
+    await expect(page.getByRole('region', { name: 'Relations de cet élément' }).getByRole('button', { name: `Fiche · ${card.title}`, exact: true })).toBeVisible({ timeout: 8000 });
+    await page.getByRole('button', { name: 'Enregistrer', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('Cet élément a changé');
+    expect((await read()).knowledge[0].content).toBe('Version IA');
+    page.once('dialog', dialog => dialog.accept()); await page.getByRole('button', { name: 'Fermer', exact: true }).click();
+    await page.getByRole('button', { name: /Document.*Document partagé/ }).click();
+    await expect(page.getByLabel('Contenu Markdown', { exact: true })).toHaveValue('Version IA');
+    await page.getByRole('button', { name: 'Supprimer le document', exact: true }).click(); await page.getByRole('button', { name: 'Supprimer', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+    await page.getByLabel('Inclure les éléments supprimés', { exact: true }).check();
+    await page.getByRole('button', { name: /Document.*Document partagé/ }).click(); await expect(page.getByLabel('Titre du document', { exact: true })).toBeDisabled();
+    expect(await page.locator('dialog').evaluate(el => el.scrollWidth <= el.clientWidth && el.scrollTop === 0)).toBe(true);
+    await page.getByRole('button', { name: 'Fermer', exact: true }).first().click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally { await client.close(); }
+});
