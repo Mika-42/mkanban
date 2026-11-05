@@ -27,9 +27,19 @@ export const columnDeletionSchema = z.discriminatedUnion('mode', [
 ]);
 export const moveSchema = z.object({ index: z.number().int().min(0), columnId: idSchema });
 export const splitSchema = z.object({ title, points: z.number().int().min(0).max(999), checklistIds: z.array(idSchema).default([]) });
+export const pointSnapshotSchema = z.object({
+  at: z.string().datetime(),
+  total: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+}).refine(value => value.completed <= value.total, 'Les points terminés dépassent le total');
+export const pointHistorySchema = z.array(pointSnapshotSchema).refine(
+  entries => entries.every((entry, index) => index === 0 || Date.parse(entry.at) > Date.parse(entries[index - 1].at)),
+  'Les observations doivent être dans l’ordre chronologique',
+).default([]);
 
 export type CardInput = z.infer<typeof cardInputSchema>;
 export type Card = CardInput & { id: string; columnId: string; position: number; createdAt: string; updatedAt: string };
 export type Column = z.infer<typeof columnInputSchema> & { id: string; boardId: string; position: number; cards: Card[] };
 export type BoardSummary = z.infer<typeof boardInputSchema> & { id: string; createdAt: string };
-export type Board = BoardSummary & { schemaVersion: 1; columns: Column[] };
+export type PointSnapshot = z.infer<typeof pointSnapshotSchema>;
+export type Board = BoardSummary & { schemaVersion: 1; columns: Column[]; pointHistory: PointSnapshot[] };

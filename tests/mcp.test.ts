@@ -37,6 +37,7 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   assert.equal(split.created.checklist.length, 1);
   const viaMcp = await call('get_board', { boardId: board.id });
   assert.equal(viaMcp.columns[0].cardCount, 2); assert.equal(viaMcp.columns[0].totalPoints, 8);
+  assert.deepEqual({ total: viaMcp.pointHistory.at(-1).total, completed: viaMcp.pointHistory.at(-1).completed }, { total: 8, completed: 5 });
   const resource = await client.readResource({ uri: `kanban://boards/${board.id}` });
   assert.equal(JSON.parse((resource.contents[0] as { text: string }).text).columns[0].cards.length, 2);
   const invalid = await client.callTool({ name: 'move_card', arguments: { boardId: board.id, cardId: card.id, columnId: 'missing', index: 0 } });
@@ -76,4 +77,5 @@ test('official stdio client reads and edits persisted JSON from a separate proce
   const result = await client.callTool({ name: 'create_card', arguments: { boardId: board.id, columnId: column.id, title: 'From separate process', points: 5 } });
   assert.notEqual(result.isError, true);
   const loaded = await store.getBoard(board.id); assert.equal(loaded.columns[0].cards[0].title, 'From separate process'); assert.equal(loaded.columns[0].cards[0].points, 5);
+  assert.equal(loaded.pointHistory.at(-1)!.total, 5);
 });

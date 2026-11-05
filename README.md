@@ -45,9 +45,25 @@ docker compose cp mkanban:/app/data/boards ./sauvegarde-boards
 - Case terminé/non terminé. Terminer une carte ne la déplace pas automatiquement.
 - Découpage : nouvelle carte adjacente, répartition des points, transfert des éléments de checklist choisis. Le total des points reste inchangé ; les autres propriétés et la description sont copiées. Enregistrer les modifications avant de scinder.
 - Recherche (`Ctrl/Cmd + K`) et filtres par membre, étiquette et état. Export JSON depuis la barre d’outils ou les paramètres du tableau.
+- Onglet **Graphiques** : burn-up et burn-down en story points, période personnalisable, exploration au survol ou au clavier, valeurs par jour et exports CSV/SVG.
 - Suppressions confirmées. Pour une colonne non vide, choisir de déplacer toutes ses fiches à la fin d’une autre colonne du même tableau, ou de supprimer définitivement la colonne et ses fiches. Aucune option n’est choisie automatiquement. Le transfert conserve l’ordre, les propriétés et les points des fiches ; il est enregistré avec la suppression de la colonne en une seule écriture JSON. Pour la dernière colonne du tableau, seule la suppression confirmée des fiches est proposée.
 
 Les données sont enregistrées côté serveur à chaque action. Dans le détail d’une carte, cliquer sur **Enregistrer** pour appliquer les modifications. Les changements MCP apparaissent dans le navigateur sous environ 2,5 secondes. Si une carte a changé depuis son ouverture, l’enregistrement du brouillon est refusé : fermer et rouvrir la carte pour récupérer la version courante.
+
+## Burn-up et burn-down
+
+Dans chaque tableau, ouvrir **Graphiques** à côté de l’onglet Tableau. Les indicateurs en haut affichent les points actuels du tableau ; les courbes couvrent la période sélectionnée, indépendamment de la recherche et des filtres de cartes.
+
+- **Burn-up** : points des cartes actuellement cochées « terminées », comparés au total des points du tableau. Le total peut varier si des cartes sont ajoutées, supprimées ou réestimées.
+- **Burn-down** : points restants (`total − terminés`), comparés à une ligne idéale allant du reste à faire de la première journée connue de la période jusqu’à zéro à la date de fin. Cette ligne est une référence linéaire, pas une prévision de livraison. Une période d’une journée montre seulement les valeurs de cette journée.
+
+La case terminé/non terminé fait foi, quelle que soit la colonne. Rouvrir une carte ou changer son estimation modifie donc les courbes. Supprimer une carte retire ses points du périmètre actuel ; l’historique conserve les observations précédentes. Déplacer les cartes ou renommer une colonne ne change pas les totaux.
+
+Le serveur enregistre une observation horodatée chaque fois que les points totaux ou terminés changent, dans le champ `pointHistory` du **même fichier JSON que le tableau**. Les actions du navigateur, de l’API HTTP et de MCP utilisent le même mécanisme, sous verrou. Les observations restent disponibles après redémarrage et sont incluses dans l’export JSON, `get_board` et la ressource MCP du tableau. Aucun service de collecte externe n’est nécessaire.
+
+Les tableaux existants sont migrés automatiquement lors de leur première lecture : une première observation décrit leur état courant. **La progression antérieure n’est pas reconstruite**, car elle n’était pas conservée. Les courbes restent vides avant le début du suivi. Les jours sans modification reprennent la dernière valeur connue ; la journée courante représente la dernière observation disponible. Les valeurs futures restent vides, même si la ligne idéale s’étend à une échéance future.
+
+Les dates correspondent au fuseau du navigateur, affiché sous les graphiques. Plusieurs modifications dans une journée sont regroupées en sa dernière valeur observée. Les périodes rapides couvrent 7, 30 ou 90 jours, et « Tout l’historique » revient au début du suivi. Une période personnalisée peut aller jusqu’à 10 ans. Le tableau de valeurs et l’export CSV utilisent les mêmes données ; les valeurs inconnues sont vides dans le CSV. Chaque graphique peut être téléchargé au format SVG autonome.
 
 ## Stockage JSON et sauvegardes
 
@@ -59,7 +75,7 @@ data/boards/
   a0f55ec1-8141-4a4a-85d2-678e3125320a.json
 ```
 
-Chaque fichier contient `schemaVersion: 1`, l’identifiant, le titre, la description, la couleur, les colonnes et leurs cartes, checklists et propriétés. Le nom est l’UUID du tableau : renommer le tableau ne renomme pas son fichier. Le fichier reste lisible et portable ; aucun fichier séparé n’est nécessaire pour les cartes. Les données ne sont pas stockées dans le navigateur (seul l’identifiant du tableau sélectionné y est mémorisé).
+Chaque fichier contient `schemaVersion: 1`, l’identifiant, le titre, la description, la couleur, les colonnes et leurs cartes, checklists et propriétés, ainsi que `pointHistory` pour l’historique des points. Chaque observation contient `at` (date UTC ISO), `total` et `completed`. Le nom est l’UUID du tableau : renommer le tableau ne renomme pas son fichier. Le fichier reste lisible et portable ; aucun fichier séparé n’est nécessaire pour les cartes. Les données ne sont pas stockées dans le navigateur (seul l’identifiant du tableau sélectionné y est mémorisé).
 
 Les écritures utilisent un fichier temporaire, une synchronisation sur disque, un remplacement atomique et un verrou interprocessus commun au dossier. Cela évite les JSON partiellement écrits et les pertes lors d’écritures concurrentes par le serveur web et MCP. Utiliser un disque local ; le fonctionnement des verrous sur NFS et autres partages réseau n’est pas garanti.
 
@@ -154,6 +170,6 @@ npx playwright install chromium  # uniquement si aucun Chromium compatible n’e
 npm run test:e2e
 ```
 
-Les tests de service vérifient les fichiers JSON, la persistance, les écritures concurrentes, les déplacements, le découpage, les entrées invalides, les conflits, le transfert ou la suppression des fiches d’une colonne et le protocole réel MCP HTTP et stdio. Les tests Chromium vérifient les propriétés, le rendu Markdown, les checklists, les déplacements des cartes et colonnes, l’export, les modifications IA, la vue d’ensemble des tableaux, les confirmations de suppression et le mobile. Ils utilisent le port 3100 et des données isolées sous `test-results/boards`. `CHROMIUM_PATH` permet de choisir un exécutable ; `/usr/bin/chromium` est utilisé s’il est présent.
+Les tests de service vérifient les fichiers JSON, la persistance, les écritures concurrentes, les déplacements, le découpage, les entrées invalides, les conflits, le transfert ou la suppression des fiches d’une colonne et le protocole réel MCP HTTP et stdio. Ils couvrent aussi l’historique des points, la migration des anciens tableaux, les changements de fuseau, l’absence d’historique et les périodes futures ou invalides. Les tests Chromium vérifient les propriétés, le rendu Markdown, les checklists, les déplacements des cartes et colonnes, l’export, les modifications IA, la vue d’ensemble des tableaux, les confirmations de suppression, les graphiques et le mobile. Ils utilisent le port 3100 et des données isolées sous `test-results/boards`. `CHROMIUM_PATH` permet de choisir un exécutable ; `/usr/bin/chromium` est utilisé s’il est présent.
 
 Structure : `client/src` (React), `server/store.ts` (JSON et règles métier), `server/app.ts` (API HTTP), `server/mcp.ts` (outils MCP), `server/stdio.ts` (transport stdio).

@@ -3,26 +3,26 @@ import { mkdir, readdir, readFile, rename, unlink, open } from 'node:fs/promises
 import path from 'node:path';
 import lockfile from 'proper-lockfile';
 import { z } from 'zod';
-import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
+import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, pointHistorySchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
 
 export class StoreError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
 const storedCardSchema = cardInputSchema.extend({ id: idSchema, columnId: idSchema, position: z.number().int().nonnegative(), createdAt: z.string(), updatedAt: z.string() });
 const storedColumnSchema = columnInputSchema.extend({ id: idSchema, boardId: idSchema, position: z.number().int().nonnegative(), cards: z.array(storedCardSchema) });
-const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema) });
+const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema), pointHistory: pointHistorySchema });
 const nextTimestamp = (current: string) => new Date(Math.max(Date.now(), Date.parse(current) + 1)).toISOString();
 
 /** One UTF-8 JSON document per board. Atomic replacement + interprocess lock. */
 export class Store {
   readonly directory: string;
-  constructor(directory = process.env.DATA_DIR || path.resolve('data/boards')) { this.directory = path.resolve(directory); }
+  constructor(directory = process.env.DATA_DIR || path.resolve('data/boards'), private readonly now: () => Date = () => new Date()) { this.directory = path.resolve(directory); }
   async init() { await mkdir(this.directory, { recursive: true }); }
   private file(id: string) {
     if (!z.string().uuid().safeParse(id).success) throw new StoreError('Tableau introuvable', 404);
     return path.join(this.directory, `${id}.json`);
   }
-  async getBoard(id: string): Promise<Board> {
+  private async readBoard(id: string): Promise<Board> {
     try {
       const board = storedBoardSchema.parse(JSON.parse(await readFile(this.file(id), 'utf8')));
       if (board.id !== id) throw new StoreError('Le nom du fichier ne correspond pas à son tableau', 500);
@@ -32,11 +32,36 @@ export class Store {
       throw e;
     }
   }
+  async getBoard(id: string): Promise<Board> {
+    const board = await this.readBoard(id);
+    if (!this.needsSnapshot(board)) return board;
+    // Migrate legacy JSON only once, under the same lock used by all writers.
+    return this.locked(async () => {
+      const latest = await this.readBoard(id);
+      if (this.recordPoints(latest)) await this.write(latest);
+      return latest;
+    });
+  }
+  private totals(board: Board) {
+    return board.columns.flatMap(c => c.cards).reduce((sum, card) => ({ total: sum.total + card.points, completed: sum.completed + (card.completed ? card.points : 0) }), { total: 0, completed: 0 });
+  }
+  private needsSnapshot(board: Board) {
+    const previous = board.pointHistory.at(-1);
+    const current = this.totals(board);
+    return !previous || previous.total !== current.total || previous.completed !== current.completed;
+  }
+  private recordPoints(board: Board) {
+    if (!this.needsSnapshot(board)) return false;
+    const previous = board.pointHistory.at(-1);
+    const at = new Date(Math.max(this.now().valueOf(), previous ? Date.parse(previous.at) + 1 : 0)).toISOString();
+    board.pointHistory.push({ at, ...this.totals(board) });
+    return true;
+  }
   async listBoards(): Promise<BoardSummary[]> {
     await this.init();
     const files = (await readdir(this.directory)).filter(f => /^[\da-f-]{36}\.json$/i.test(f));
     const boards = await Promise.all(files.map(f => this.getBoard(f.slice(0, -5))));
-    return boards.map(({ columns: _, schemaVersion: __, ...board }) => board).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return boards.map(({ columns: _, schemaVersion: __, pointHistory: ___, ...board }) => board).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
   private async locked<T>(operation: () => Promise<T>): Promise<T> {
     await this.init();
@@ -54,9 +79,11 @@ export class Store {
   }
   private async mutate<T>(boardId: string, change: (board: Board) => T): Promise<T> {
     return this.locked(async () => {
-      const board = await this.getBoard(boardId);
+      const board = await this.readBoard(boardId);
+      this.recordPoints(board);
       const result = change(board);
       this.normalize(board);
+      this.recordPoints(board);
       await this.write(board);
       return result;
     });
@@ -82,7 +109,8 @@ export class Store {
   async createBoard(input: unknown): Promise<Board> {
     const values = boardInputSchema.parse(input);
     return this.locked(async () => {
-      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: new Date().toISOString(), columns: [] };
+      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: this.now().toISOString(), columns: [], pointHistory: [] };
+      this.recordPoints(board);
       await this.write(board); return board;
     });
   }
@@ -91,7 +119,7 @@ export class Store {
     return this.mutate(boardId, board => Object.assign(board, patch));
   }
   async deleteBoard(boardId: string) {
-    return this.locked(async () => { await this.getBoard(boardId); await unlink(this.file(boardId)); return { deleted: true }; });
+    return this.locked(async () => { await this.readBoard(boardId); await unlink(this.file(boardId)); return { deleted: true }; });
   }
   async createColumn(boardId: string, input: unknown) {
     const values = columnInputSchema.parse(input);
