@@ -22,7 +22,7 @@ export function BoardCharts({ board }: { board: Board }) {
   }, [board.pointHistory, start, end]);
   const completion = metrics.total ? Math.round(metrics.completed / metrics.total * 100) : 0;
   return <section className="board-charts" role="tabpanel" id="charts-panel" aria-labelledby="charts-tab">
-    <div className="charts-heading"><div><h2>Chaque point raconte une avancée.</h2><p>Suivez la progression de votre tableau en story points.</p></div><button className="button secondary" disabled={!days.length} onClick={() => download(chartCsv(days), 'text/csv;charset=utf-8', `mkanban-${board.id}-story-points.csv`)}><ArrowDownToLine size={16} />Exporter les données CSV</button></div>
+    <div className="charts-heading"><div><h2>Chaque point raconte une avancée.</h2><p>Suivez la progression de votre projet en story points.</p></div><button className="button secondary" disabled={!days.length} onClick={() => download(chartCsv(days), 'text/csv;charset=utf-8', `mkAgile-${board.id}-story-points.csv`)}><ArrowDownToLine size={16} />Exporter les données CSV</button></div>
     <div className="chart-metrics" aria-label="Story points actuels">
       <div><span><Diamond size={15} />Total actuel</span><strong>{number(metrics.total)}<small>points</small></strong></div>
       <div><span><CheckCheck size={16} />Terminés</span><strong>{number(metrics.completed)}<small>points</small></strong></div>
@@ -32,7 +32,7 @@ export function BoardCharts({ board }: { board: Board }) {
     <div className="chart-period"><div className="chart-presets" aria-label="Périodes rapides">{[7, 30, 90].map(n => <button key={n} className={start === addDays(today, 1 - n) && end === today ? 'selected' : ''} aria-pressed={start === addDays(today, 1 - n) && end === today} onClick={() => { setStart(addDays(today, 1 - n)); setEnd(today); }}>{n} jours</button>)}<button onClick={() => { setStart(firstDay); setEnd(today); }}>Tout l’historique</button></div><div className="chart-dates"><label htmlFor="chart-start">Du<input id="chart-start" type="date" value={start} onChange={e => setStart(e.target.value)} /></label><label htmlFor="chart-end">Au<input id="chart-end" type="date" value={end} onChange={e => setEnd(e.target.value)} /></label></div></div>
     {error ? <div className="form-error" role="alert">{error}</div> : <>
       <div className="charts-grid"><PointsChart days={days} kind="up" /><PointsChart days={days} kind="down" /></div>
-      <div className="chart-data-toolbar"><p>Valeurs en fin de journée · {Intl.DateTimeFormat().resolvedOptions().timeZone} · Ensemble du tableau</p><button className="text-button" aria-expanded={table} onClick={() => setTable(!table)}><Table2 size={15} />{table ? 'Masquer les valeurs' : 'Voir les valeurs'}</button></div>
+      <div className="chart-data-toolbar"><p>Valeurs en fin de journée · {Intl.DateTimeFormat().resolvedOptions().timeZone} · Ensemble du projet</p><button className="text-button" aria-expanded={table} onClick={() => setTable(!table)}><Table2 size={15} />{table ? 'Masquer les valeurs' : 'Voir les valeurs'}</button></div>
       {table && <div className="chart-table-wrap"><table className="chart-table"><caption>Story points par jour sur la période sélectionnée</caption><thead><tr><th scope="col">Date</th><th scope="col">Total</th><th scope="col">Terminés</th><th scope="col">Restants</th><th scope="col">Restants idéaux</th></tr></thead><tbody>{days.map(day => <tr key={day.date}><th scope="row">{formatDay(day.date, true)}</th><td>{number(day.total)}</td><td>{number(day.completed)}</td><td>{number(day.remaining)}</td><td>{number(day.ideal)}</td></tr>)}</tbody></table></div>}
     </>}
     <div className="chart-explanation"><Info size={18} /><div><p>Suivi disponible depuis le <strong>{formatDay(firstDay, true)}</strong>. Les valeurs antérieures restent inconnues. Les observations futures ne sont pas projetées.</p><p>Une fiche compte comme terminée lorsqu’elle est cochée, quelle que soit sa colonne. Ajouter, supprimer, réestimer ou rouvrir des fiches fait varier les courbes. La ligne idéale relie les points restants de la première journée connue à zéro en fin de période ; c’est une référence, pas une prévision.</p></div></div>
@@ -88,7 +88,7 @@ function PointsChart({ days, kind }: { days: ChartDay[]; kind: 'up' | 'down' }) 
       setActive(Math.max(0, Math.min(days.length - 1, Math.round((pos - left) / (right - left) * (days.length - 1)))));
     }} onPointerLeave={() => setActive(null)}>
       <title>{title} — Story points du {formatDay(days[0].date, true)} au {formatDay(days.at(-1)!.date, true)}</title>
-      <desc>{kind === 'up' ? 'Points terminés et total de points du tableau.' : 'Points restants et ligne idéale décroissante.'} Les valeurs inconnues ne sont pas tracées.</desc>
+      <desc>{kind === 'up' ? 'Points terminés et total de points du projet.' : 'Points restants et ligne idéale décroissante.'} Les valeurs inconnues ne sont pas tracées.</desc>
       <rect width={width} height={height} fill="white" />
       <text x={left} y={17} fill="#9a8ba8" fontSize={11}>{title} · Story points</text>
       {ticks.map(value => <g key={value}><line x1={left} x2={right} y1={y(value)} y2={y(value)} stroke="#eeebf4" strokeDasharray="3 4" /><text x={left - 9} y={y(value) + 4} textAnchor="end" fontSize={11} fill="#ac9bb9">{number(value)}</text></g>)}

@@ -24,14 +24,14 @@ export function Confirm({ title, description, onConfirm, onClose, busy }: { titl
 }
 export function McpDialog({ onClose }: { onClose: () => void }) {
   const endpoint = `${location.origin}/mcp`;
-  const config = JSON.stringify({ mcpServers: { mkanban: { url: endpoint } } }, null, 2);
-  return <Modal title="Votre tableau, avec un copilote" onClose={onClose} wide>
+  const config = JSON.stringify({ mcpServers: { mkAgile: { url: endpoint } } }, null, 2);
+  return <Modal title="Votre projet, avec un copilote" onClose={onClose} wide>
     <div className="modal-body mcp-body"><div className="feature-icon"><Cable size={26} /></div><h2>Faites équipe avec votre IA.</h2><p className="muted">Créez, organisez et découpez vos tâches depuis votre assistant grâce au protocole MCP.</p>
       <div className="connection-status"><span className="status-dot" />Serveur MCP disponible avec cette application<span className="badge">Streamable HTTP</span></div>
       <label>Adresse du serveur</label><div className="code-line"><code>{endpoint}</code><CopyButton value={endpoint} /></div>
       <label>Configuration d’un client compatible</label><div className="code-block"><pre>{config}</pre><CopyButton value={config} /></div>
       <p className="hint">Ajoutez cette adresse dans les paramètres MCP de votre assistant local. Le format de configuration dépend du client. Pour un client qui utilise stdio, consultez le README du projet.</p>
-      <div className="mcp-features"><span><CheckCircle2 size={16} /> 18 outils Kanban</span><span><FileJson size={16} /> Mêmes fichiers JSON</span><span><ShieldCheck size={16} /> Usage local</span></div>
+      <div className="mcp-features"><span><CheckCircle2 size={16} /> 23 outils Kanban et décisions</span><span><FileJson size={16} /> Mêmes fichiers JSON</span><span><ShieldCheck size={16} /> Usage local</span></div>
       <div className="prompt-example"><Terminal size={19} /><p>« Découpe cette carte en deux tâches et répartis ses points, puis déplace-les dans À faire. »</p></div>
       <p className="hint">Votre assistant doit pouvoir joindre cette machine. Une IA hébergée à distance ne peut pas accéder directement à votre adresse locale.</p>
     </div><footer className="modal-footer"><button className="button primary" onClick={onClose}>C’est compris</button></footer>

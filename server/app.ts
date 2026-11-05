@@ -25,6 +25,21 @@ export function createApp(store: Store, options: { allowedHosts?: string[] } = {
   app.get('/api/boards/:boardId', async (req, res) => res.json(await store.getBoard(req.params.boardId)));
   app.patch('/api/boards/:boardId', async (req, res) => res.json(await store.updateBoard(req.params.boardId, req.body)));
   app.delete('/api/boards/:boardId', async (req, res) => res.json(await store.deleteBoard(req.params.boardId)));
+  app.get('/api/boards/:boardId/decisions', async (req, res) => {
+    const query = { ...req.query };
+    for (const key of ['statuses', 'types']) if (typeof query[key] === 'string') query[key] = [query[key] as string];
+    res.json(await store.listDecisions(req.params.boardId, query));
+  });
+  app.post('/api/boards/:boardId/decisions', async (req, res) => res.status(201).json(await store.createDecision(req.params.boardId, req.body)));
+  app.get('/api/boards/:boardId/decisions/:decisionId', async (req, res) => res.json(await store.getDecision(req.params.boardId, req.params.decisionId)));
+  app.patch('/api/boards/:boardId/decisions/:decisionId', async (req, res) => {
+    const { expectedUpdatedAt, ...patch } = req.body;
+    res.json(await store.updateDecision(req.params.boardId, req.params.decisionId, patch, z.string().optional().parse(expectedUpdatedAt)));
+  });
+  app.delete('/api/boards/:boardId/decisions/:decisionId', async (req, res) => {
+    const { expectedUpdatedAt } = z.object({ expectedUpdatedAt: z.string().optional() }).strict().parse(req.body ?? {});
+    res.json(await store.deleteDecision(req.params.boardId, req.params.decisionId, expectedUpdatedAt));
+  });
   app.get('/api/boards/:boardId/gantt', async (req, res) => {
     const options = ganttQuerySchema.parse({ ...req.query, dayWidth: req.query.dayWidth === undefined ? undefined : Number(req.query.dayWidth) });
     const plan = await store.getGantt(req.params.boardId);

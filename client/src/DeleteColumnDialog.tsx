@@ -31,7 +31,7 @@ export function DeleteColumnDialog({ column, board, onClose, onDeleted }: { colu
             <legend className="sr-only">Que faire des fiches ?</legend>
             <label className={`delete-option ${mode === 'move' ? 'selected' : ''} ${!targets.length ? 'unavailable' : ''}`}>
               <input type="radio" name="column-deletion" value="move" checked={mode === 'move'} disabled={!targets.length} onChange={() => setMode('move')} />
-              <span><strong><ArrowRight size={16} />Déplacer toutes les fiches</strong><span>Les conserver dans une autre colonne de ce tableau.</span></span>
+              <span><strong><ArrowRight size={16} />Déplacer toutes les fiches</strong><span>Les conserver dans une autre colonne de ce projet.</span></span>
             </label>
             {!targets.length && <p className="hint">Créez une autre colonne pour pouvoir y déplacer les fiches.</p>}
             {mode === 'move' && <div className="move-column-target"><label htmlFor="delete-column-target">Colonne de destination</label><select id="delete-column-target" value={targetId} onChange={e => setTargetId(e.target.value)}><option value="" disabled>Choisir une colonne</option>{targets.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}</select><p className="hint">Les fiches seront ajoutées à la fin de cette colonne, dans leur ordre actuel.</p></div>}

@@ -4,7 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { readFile } from 'node:fs/promises';
 
 async function fixture(page: Page, request: APIRequestContext) {
-  const board = await (await request.post('/api/boards', { data: { title: `Tableau de test ${crypto.randomUUID().slice(0, 8)}` } })).json();
+  const board = await (await request.post('/api/boards', { data: { title: `Projet de test ${crypto.randomUUID().slice(0, 8)}` } })).json();
   const a = await (await request.post(`/api/boards/${board.id}/columns`, { data: { title: 'À faire' } })).json();
   const b = await (await request.post(`/api/boards/${board.id}/columns`, { data: { title: 'En cours' } })).json();
   await page.addInitScript(id => {
@@ -64,7 +64,7 @@ test('create, edit Markdown and properties, complete, split, move, export and de
   await page.reload();
   await expect(destination.locator('.column-points')).toHaveText('3');
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Exporter le tableau JSON', exact: true }).click();
+  await page.getByRole('button', { name: 'Exporter le projet JSON', exact: true }).click();
   expect((await download).suggestedFilename()).toMatch(/\.json$/);
   await destination.getByRole('button', { name: 'Petite livraison', exact: true }).click();
   await page.getByRole('button', { name: 'Supprimer la carte', exact: true }).click();
@@ -125,10 +125,10 @@ test('mobile navigation, new boards and search work without document overflow', 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Ouvrir la navigation', exact: true }).click();
-  await page.getByRole('button', { name: 'Nouveau tableau', exact: true }).first().click();
-  await page.getByLabel('Nom du tableau', { exact: true }).fill('Mon tableau mobile');
-  await page.getByRole('button', { name: 'Créer le tableau', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /^Mon tableau mobile/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Nouveau projet', exact: true }).first().click();
+  await page.getByLabel('Nom du projet', { exact: true }).fill('Mon projet mobile');
+  await page.getByRole('button', { name: 'Créer le projet', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /^Mon projet mobile/ })).toBeVisible();
   const id = await page.evaluate(() => localStorage.getItem('mkanban.board'));
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByLabel('Rechercher des cartes', { exact: true }).fill('Rien');
@@ -142,27 +142,27 @@ test('workspace overview lists and opens boards, remains open after refresh, and
   const other = await (await request.post('/api/boards', { data: { title: 'Un autre projet', description: 'Retrouver ce projet en recherche' } })).json();
   await page.goto('/');
   await page.getByRole('button', { name: 'Mon espace', exact: true }).click();
-  const overview = page.getByRole('region', { name: 'Vue d’ensemble des tableaux' });
-  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toBeVisible();
-  await expect(overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true })).toBeVisible();
+  const overview = page.getByRole('region', { name: 'Vue d’ensemble des projets' });
+  await expect(overview.getByRole('button', { name: `Ouvrir le projet ${board.title}`, exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: 'Ouvrir le projet Un autre projet', exact: true })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Colonne À faire', exact: true })).toHaveCount(0);
   // Polling used to force the first board open again. Wait for one actual refresh.
   await page.waitForResponse(response => response.url().endsWith('/api/boards') && response.request().method() === 'GET');
   await expect(overview).toBeVisible();
   await page.reload();
   await expect(overview).toBeVisible();
-  await page.getByLabel('Rechercher un tableau', { exact: true }).fill('en recherche');
-  await expect(overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true })).toBeVisible();
-  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Effacer la recherche de tableaux', exact: true }).click();
-  await overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true }).click();
+  await page.getByLabel('Rechercher un projet', { exact: true }).fill('en recherche');
+  await expect(overview.getByRole('button', { name: 'Ouvrir le projet Un autre projet', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: `Ouvrir le projet ${board.title}`, exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Effacer la recherche de projets', exact: true }).click();
+  await overview.getByRole('button', { name: 'Ouvrir le projet Un autre projet', exact: true }).click();
   await expect(page.getByRole('heading', { name: /^Un autre projet/ })).toBeVisible();
-  await page.getByRole('button', { name: /^Mes tableaux/ }).click();
+  await page.getByRole('button', { name: /^Mes projets/ }).click();
   await expect(overview).toBeVisible();
-  await overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true }).click();
+  await overview.getByRole('button', { name: `Ouvrir le projet ${board.title}`, exact: true }).click();
   await request.delete(`/api/boards/${board.id}`);
   await expect(overview).toBeVisible({ timeout: 8000 });
-  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toHaveCount(0);
+  await expect(overview.getByRole('button', { name: `Ouvrir le projet ${board.title}`, exact: true })).toHaveCount(0);
   await request.delete(`/api/boards/${other.id}`);
 });
 
@@ -199,9 +199,9 @@ test('mobile workspace navigation and confirmed deletion of the last populated c
   await page.goto('/');
   await page.getByRole('button', { name: 'Ouvrir la navigation', exact: true }).click();
   await page.getByRole('button', { name: 'Mon espace', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Mes tableaux', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Mes projets', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true }).click();
+  await page.getByRole('button', { name: `Ouvrir le projet ${board.title}`, exact: true }).click();
   await page.getByRole('button', { name: 'Options de À faire', exact: true }).click();
   await page.getByRole('button', { name: 'Supprimer la colonne', exact: true }).click();
   await expect(page.getByRole('radio', { name: /Déplacer toutes les fiches/ })).toBeDisabled();
@@ -253,7 +253,7 @@ test('charts show actual story points, validate periods, support keyboard explor
   await expect(page.getByRole('alert')).toHaveCount(0);
   await page.getByRole('tab', { name: 'Graphiques', exact: true }).focus();
   await page.keyboard.press('ArrowLeft');
-  await expect(page.getByRole('tab', { name: /^Tableau/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('tab', { name: /^Kanban/ })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('button', { name: 'À terminer', exact: true })).toBeVisible();
   expect((await read()).pointHistory.at(-1)).toMatchObject({ total: 11, completed: 3 });
   await request.delete(`/api/boards/${board.id}`);

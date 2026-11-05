@@ -45,9 +45,46 @@ export const pointHistorySchema = z.array(pointSnapshotSchema).refine(
   'Les observations doivent être dans l’ordre chronologique',
 ).default([]);
 
+export const decisionStatusSchema = z.enum(['draft', 'discussing', 'proposed', 'accepted', 'rejected', 'superseded']);
+export const decisionTypeSchema = z.enum(['technical', 'functional', 'product', 'organization', 'other']);
+export const decisionLinkSchema = z.object({ kind: z.enum(['card', 'decision', 'url']), target: z.string().trim().min(1).max(2000), label: z.string().trim().max(200).default('') }).strict();
+export const decisionInputSchema = z.object({
+  title,
+  type: decisionTypeSchema.default('technical'),
+  status: decisionStatusSchema.default('draft'),
+  context: z.string().max(100_000).default(''),
+  alternatives: z.string().max(100_000).default(''),
+  outcome: z.string().max(100_000).default(''),
+  rationale: z.string().max(100_000).default(''),
+  consequences: z.string().max(100_000).default(''),
+  tags: z.array(z.string().trim().min(1).max(40)).max(15).refine(tags => new Set(tags).size === tags.length, 'Étiquettes dupliquées').default([]),
+  links: z.array(decisionLinkSchema).max(200).default([]),
+  supersededBy: idSchema.nullable().default(null),
+}).strict();
+export const decisionPatchSchema = decisionInputSchema.partial();
+export const decisionHistorySchema = z.object({ at: z.string().datetime(), action: z.enum(['created', 'updated', 'deleted']), fromStatus: decisionStatusSchema.nullable(), snapshot: decisionInputSchema });
+export const storedDecisionSchema = decisionInputSchema.extend({
+  id: idSchema, number: z.number().int().positive(), createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
+  statusChangedAt: z.string().datetime(), decidedAt: z.string().datetime().nullable(), deletedAt: z.string().datetime().nullable(),
+  history: z.array(decisionHistorySchema).min(1),
+});
+export const decisionQuerySchema = z.object({
+  statuses: z.array(decisionStatusSchema).optional(), types: z.array(decisionTypeSchema).optional(),
+  search: z.string().max(1000).default(''), tag: z.string().max(40).optional(), linkedCardId: idSchema.optional(),
+  dateField: z.enum(['createdAt', 'updatedAt', 'decidedAt', 'statusChangedAt']).default('createdAt'),
+  dateFrom: dateSchema.optional(), dateTo: dateSchema.optional(),
+  deleted: z.enum(['exclude', 'include', 'only']).default('exclude'),
+  sort: z.enum(['newest', 'oldest', 'updated', 'number']).default('newest'),
+}).strict();
+
 export type CardInput = z.infer<typeof cardInputSchema>;
 export type Card = CardInput & { id: string; columnId: string; position: number; createdAt: string; updatedAt: string };
 export type Column = z.infer<typeof columnInputSchema> & { id: string; boardId: string; position: number; cards: Card[] };
 export type BoardSummary = z.infer<typeof boardInputSchema> & { id: string; createdAt: string };
 export type PointSnapshot = z.infer<typeof pointSnapshotSchema>;
-export type Board = BoardSummary & { schemaVersion: 1; columns: Column[]; pointHistory: PointSnapshot[] };
+export type DecisionInput = z.infer<typeof decisionInputSchema>;
+export type Decision = z.infer<typeof storedDecisionSchema>;
+export type DecisionStatus = DecisionInput['status'];
+export type DecisionType = DecisionInput['type'];
+export type DecisionQuery = z.infer<typeof decisionQuerySchema>;
+export type Board = BoardSummary & { schemaVersion: 1; columns: Column[]; pointHistory: PointSnapshot[]; decisions: Decision[]; nextDecisionNumber: number };
