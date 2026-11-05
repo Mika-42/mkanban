@@ -41,6 +41,7 @@ docker compose cp mkanban:/app/data/boards ./sauvegarde-boards
 - Plusieurs tableaux, chacun avec son nom, sa description et sa couleur. Cliquer sur « Mon espace », « Mes tableaux » ou le logo pour afficher tous les tableaux sous forme de tuiles, les rechercher et en ouvrir un. Cette vue reste ouverte après actualisation ; la suppression du tableau courant y ramène également.
 - Colonnes déplaçables, renommables et colorables. Compteur de cartes et somme des story points, y compris les cartes terminées. Les filtres ne changent pas les totaux.
 - Cartes déplaçables au sein d’une colonne ou vers une autre. Utiliser la poignée en haut à droite ; une alternative de déplacement existe dans le détail de la carte. Les colonnes proposent aussi un menu gauche/droite. Le déplacement au clavier commence avec Espace sur une poignée, puis les flèches et Espace pour déposer, Échap pour annuler.
+- Clic droit sur une fiche : **Assigner**, **Scinder** ou **Supprimer**, directement depuis le Kanban. Le bouton « … » de la fiche ouvre le même menu sur mobile. Au clavier, utiliser ce bouton ou `Maj + F10` depuis la fiche, puis les flèches, Entrée et Échap.
 - Titre, description Markdown avec aperçu GFM, checklist éditable, date d’échéance, étiquettes/flags libres, membres et points entiers de 0 à 999. Les membres sont des noms, pas des comptes utilisateurs.
 - Case terminé/non terminé. Terminer une carte ne la déplace pas automatiquement.
 - Découpage : nouvelle carte adjacente, répartition des points, transfert des éléments de checklist choisis. Le total des points reste inchangé ; les autres propriétés et la description sont copiées. Enregistrer les modifications avant de scinder.
@@ -50,6 +51,10 @@ docker compose cp mkanban:/app/data/boards ./sauvegarde-boards
 - Suppressions confirmées. Pour une colonne non vide, choisir de déplacer toutes ses fiches à la fin d’une autre colonne du même tableau, ou de supprimer définitivement la colonne et ses fiches. Aucune option n’est choisie automatiquement. Le transfert conserve l’ordre, les propriétés et les points des fiches ; il est enregistré avec la suppression de la colonne en une seule écriture JSON. Pour la dernière colonne du tableau, seule la suppression confirmée des fiches est proposée.
 
 Les données sont enregistrées côté serveur à chaque action. Dans le détail d’une carte, cliquer sur **Enregistrer** pour appliquer les modifications. Les changements MCP apparaissent dans le navigateur sous environ 2,5 secondes. Si une carte a changé depuis son ouverture, l’enregistrement du brouillon est refusé : fermer et rouvrir la carte pour récupérer la version courante.
+
+L’assignation rapide permet de sélectionner plusieurs noms déjà utilisés dans le tableau, d’en ajouter un ou de retirer tous les membres, sans ouvrir l’éditeur complet. Le découpage rapide reprend la répartition des points et le transfert des éléments de checklist. Ces deux actions refusent un brouillon obsolète si la fiche a été modifiée entre-temps. La suppression demande toujours confirmation et retire les liens vers la fiche supprimée.
+
+Dans les fenêtres d’édition, seul le contenu défile : le titre, la fermeture et les boutons d’action restent visibles. La barre de défilement interne suit le thème et ne déborde pas du cadre arrondi.
 
 ## Gantt et dépendances
 
@@ -157,6 +162,8 @@ Le serveur web n’est pas nécessaire pour stdio. Quand les deux sont utilisés
 Ressources : `kanban://boards` et `kanban://boards/{boardId}`. `get_board` expose aussi les compteurs et points par colonne.
 
 Les mises à jour sont partielles. `update_card` remplace les listes fournies (`members`, `flags`, `checklist`) ; lire d’abord la carte pour les compléter. `expectedUpdatedAt` permet de refuser une modification obsolète. Les positions sont des index commençant à 0. Lors d’un déplacement de carte, l’index est celui de la destination après retrait de la carte. Les éléments de checklist doivent avoir un identifiant unique. Les dates utilisent `YYYY-MM-DD`.
+
+Les actions rapides utilisent les mêmes opérations que MCP : `update_card` avec `members` pour assigner, `delete_card` pour supprimer et `split_card` pour scinder. `split_card` accepte aussi `expectedUpdatedAt` afin de refuser un découpage obsolète sans changer les fiches ni leurs points.
 
 `delete_column` protège par défaut les colonnes non vides. Pour transférer les fiches avant suppression, fournir `options: { "mode": "move", "targetColumnId": "<id-destination>" }`. Pour confirmer leur suppression définitive, lire la colonne puis fournir `options: { "mode": "delete", "expectedCardIds": ["<id-carte>"] }` avec tous ses identifiants de cartes actuels. Si la liste de cartes a changé entre-temps, la suppression est refusée. L’API HTTP accepte les mêmes options directement dans le corps JSON du `DELETE /api/boards/{boardId}/columns/{columnId}`. Une colonne vide peut toujours être supprimée sans options.
 

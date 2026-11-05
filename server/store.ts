@@ -246,6 +246,7 @@ export class Store {
     const values = splitSchema.parse(input);
     return this.mutate(boardId, board => {
       const { card, column } = this.card(board, cardId);
+      if (values.expectedUpdatedAt && values.expectedUpdatedAt !== card.updatedAt) throw new StoreError('Cette carte a changé. Fermez et rouvrez le découpage avant de réessayer.', 409);
       if (values.points > card.points) throw new StoreError('La nouvelle carte ne peut pas recevoir plus de points que la carte source');
       const ids = new Set(values.checklistIds);
       if (ids.size !== values.checklistIds.length || [...ids].some(id => !card.checklist.some(i => i.id === id))) throw new StoreError('Éléments de checklist invalides');
