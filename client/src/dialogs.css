@@ -1,0 +1,13 @@
+/* Only the dialog content scrolls; the frame and actions stay in place. */
+.modal{--modal-max-height:calc(100dvh - 48px);max-height:var(--modal-max-height);overflow:hidden}
+.modal-shell{max-height:calc(var(--modal-max-height) - 2px);min-height:0;overflow:hidden}
+.modal-shell>form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:hidden}
+.modal-header{position:relative;flex:0 0 auto}
+.modal-footer{flex:0 0 auto}
+.modal-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin;scrollbar-color:#cebfde transparent}
+.modal-body::-webkit-scrollbar{width:8px;height:8px}
+.modal-body::-webkit-scrollbar-track{background:transparent;margin:10px 0}
+.modal-body::-webkit-scrollbar-thumb{background:#cebfde;border-radius:10px;border:1px solid transparent;background-clip:padding-box}
+.modal-body::-webkit-scrollbar-thumb:hover{background:#b9a3d0}
+.editor-footer{flex-wrap:wrap}.editor-footer>div:last-child{margin-left:auto}
+@media(max-width:760px){.modal{--modal-max-height:calc(100dvh - 24px)}}

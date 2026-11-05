@@ -42,6 +42,9 @@ test('move cards between and within columns, reorder columns and protect nonempt
 test('split is atomic and conserves story points and checklist items', async t => {
   const { store, board, a } = await fixture(t);
   const card = await store.createCard(board.id, a.id, { title: 'Large', description: 'hello', points: 8, completed: true, flags: ['design'], members: ['Mika'], checklist: [{ id: 'a', text: 'A', done: true }, { id: 'b', text: 'B', done: false }] });
+  const original = await store.getBoard(board.id);
+  await assert.rejects(store.splitCard(board.id, card.id, { title: 'Brouillon périmé', points: 3, expectedUpdatedAt: 'stale' }), /changé/);
+  assert.deepEqual(await store.getBoard(board.id), original);
   const split = await store.splitCard(board.id, card.id, { title: 'Petite', points: 3, checklistIds: ['b'] });
   assert.equal(split.original.points, 5); assert.equal(split.created.points, 3);
   assert.equal(split.created.completed, false); assert.equal(split.original.completed, true);

@@ -1,0 +1,20 @@
+.card-actions-trigger{position:absolute;top:5px;right:24px;width:23px;height:22px;display:grid;place-items:center;border-radius:5px;padding:0;color:#a795b6;background:#fff;opacity:0}
+.kanban-card:hover .card-actions-trigger,.kanban-card:focus-within .card-actions-trigger,.card-actions-trigger[aria-expanded=true]{opacity:1}
+.card-actions-trigger:hover,.card-actions-trigger[aria-expanded=true]{background:#f3edf9;color:#8c68bc}
+.card-flags{padding-right:35px}
+.card-context-menu{position:fixed;z-index:100;width:218px;max-width:calc(100vw - 16px);padding:5px;background:#fff;border:1px solid #e7dff0;border-radius:10px;box-shadow:0 8px 30px #38234f20}
+.card-context-title{padding:10px 9px;color:#b19dc0;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-bottom:1px solid #f1eaf7;margin-bottom:4px}
+.card-context-menu [role=menuitem]{display:flex;align-items:center;gap:10px;padding:10px 9px;width:100%;text-align:left;border-radius:6px;font-size:12px;color:#927ca4;outline:none}
+.card-context-menu [role=menuitem]:hover,.card-context-menu [role=menuitem]:focus{background:#f5effc;color:#8561b1}
+.card-context-menu [role=menuitem].danger-text:hover,.card-context-menu [role=menuitem].danger-text:focus{background:#fff2f5}
+.card-context-separator{border-top:1px solid #f0e9f5;margin:4px}
+.quick-card-title{overflow-wrap:anywhere;font-size:18px!important}
+.quick-members{border:1px solid #eae2f2;border-radius:8px;margin:3px 0 0;padding:8px 11px;max-height:260px;overflow:auto;scrollbar-width:thin;scrollbar-color:#d8cae7 transparent}
+.quick-members legend{padding:0 5px;color:#ab94b9;font-size:11px}
+.quick-members>label{display:flex;align-items:center;gap:8px;padding:8px 0;font-weight:400;font-size:12px;color:#9e86ad;cursor:pointer}
+.quick-members input{margin:0}.quick-members .avatar{width:23px;height:23px}
+.quick-member-add{display:flex;gap:8px;align-items:center}
+.quick-member-add>input{flex:1;min-width:0;font-size:12px}.quick-member-add>.button{font-size:11px}
+.quick-members-footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.quick-members-footer .text-button{font-size:11px;white-space:normal;text-align:right}
+@media(max-width:760px){.card-actions-trigger{opacity:1}.quick-members-footer{align-items:flex-start}.card-context-menu [role=menuitem]{min-height:42px}}

@@ -34,7 +34,7 @@ export const columnDeletionSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('delete'), expectedCardIds: z.array(idSchema) }),
 ]);
 export const moveSchema = z.object({ index: z.number().int().min(0), columnId: idSchema });
-export const splitSchema = z.object({ title, points: z.number().int().min(0).max(999), checklistIds: z.array(idSchema).default([]) });
+export const splitSchema = z.object({ title, points: z.number().int().min(0).max(999), checklistIds: z.array(idSchema).default([]), expectedUpdatedAt: z.string().optional() });
 export const pointSnapshotSchema = z.object({
   at: z.string().datetime(),
   total: z.number().int().nonnegative(),
