@@ -19,5 +19,5 @@ if (process.env.NODE_ENV === 'production' || process.argv.includes('--production
   const vite = await createServer({ configFile: path.join(root, 'vite.config.ts'), server: { middlewareMode: true, hmr: false, ws: false }, appType: 'spa' });
   app.use(vite.middlewares);
 }
-const server = app.listen(port, host, () => console.log(`mkanban : http://${host}:${port} | MCP : /mcp | JSON : ${store.directory}`));
+const server = app.listen(port, host, () => console.log(`mkAgile : http://${host}:${port} | MCP : /mcp | JSON : ${store.directory}`));
 for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => server.close(() => process.exit(0)));

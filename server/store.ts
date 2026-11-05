@@ -5,14 +5,20 @@ import lockfile from 'proper-lockfile';
 import { z } from 'zod';
 import { autoScheduleSchema, boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, pointHistorySchema, scheduleUpdateSchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
 import { buildGantt, orderedCards, planAutomatically } from '../shared/planning.js';
+import { decisionInputSchema, decisionPatchSchema, decisionQuerySchema, storedDecisionSchema, type Decision, type DecisionInput } from './schema.js';
+import { decisionAuthority, decisionPolicy, decisionTransitions, filterDecisions } from '../shared/decisions.js';
 
 export class StoreError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
 const storedCardSchema = cardInputSchema.extend({ id: idSchema, columnId: idSchema, position: z.number().int().nonnegative(), createdAt: z.string(), updatedAt: z.string() });
 const storedColumnSchema = columnInputSchema.extend({ id: idSchema, boardId: idSchema, position: z.number().int().nonnegative(), cards: z.array(storedCardSchema) });
-const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema), pointHistory: pointHistorySchema });
+const storedBoardSchema = boardInputSchema.extend({ schemaVersion: z.literal(1), id: z.string().uuid(), createdAt: z.string(), columns: z.array(storedColumnSchema), pointHistory: pointHistorySchema, decisions: z.array(storedDecisionSchema).default([]), nextDecisionNumber: z.number().int().positive().default(1) });
 const nextTimestamp = (current: string) => new Date(Math.max(Date.now(), Date.parse(current) + 1)).toISOString();
+const decisionInputSnapshot = (decision: Decision): DecisionInput => {
+  const { title, type, status, context, alternatives, outcome, rationale, consequences, tags, links, supersededBy } = decision;
+  return { title, type, status, context, alternatives, outcome, rationale, consequences, tags, links, supersededBy };
+};
 
 /** One UTF-8 JSON document per board. Atomic replacement + interprocess lock. */
 export class Store {
@@ -20,17 +26,19 @@ export class Store {
   constructor(directory = process.env.DATA_DIR || path.resolve('data/boards'), private readonly now: () => Date = () => new Date()) { this.directory = path.resolve(directory); }
   async init() { await mkdir(this.directory, { recursive: true }); }
   private file(id: string) {
-    if (!z.string().uuid().safeParse(id).success) throw new StoreError('Tableau introuvable', 404);
+    if (!z.string().uuid().safeParse(id).success) throw new StoreError('Projet introuvable', 404);
     return path.join(this.directory, `${id}.json`);
   }
   private async readBoard(id: string): Promise<Board> {
     try {
       const board = storedBoardSchema.parse(JSON.parse(await readFile(this.file(id), 'utf8')));
-      if (board.id !== id) throw new StoreError('Le nom du fichier ne correspond pas à son tableau', 500);
+      if (board.id !== id) throw new StoreError('Le nom du fichier ne correspond pas à son projet', 500);
+      if (new Set(board.decisions.map(d => d.number)).size !== board.decisions.length || new Set(board.decisions.map(d => d.id)).size !== board.decisions.length) throw new StoreError('Identifiants de décisions dupliqués', 500);
+      board.nextDecisionNumber = Math.max(board.nextDecisionNumber, ...board.decisions.map(d => d.number + 1));
       orderedCards(board);
       return board;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new StoreError('Tableau introuvable', 404);
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new StoreError('Projet introuvable', 404);
       throw e;
     }
   }
@@ -63,7 +71,7 @@ export class Store {
     await this.init();
     const files = (await readdir(this.directory)).filter(f => /^[\da-f-]{36}\.json$/i.test(f));
     const boards = await Promise.all(files.map(f => this.getBoard(f.slice(0, -5))));
-    return boards.map(({ columns: _, schemaVersion: __, pointHistory: ___, ...board }) => board).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    return boards.map(({ id, title, description, color, createdAt }) => ({ id, title, description, color, createdAt })).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
   private async locked<T>(operation: () => Promise<T>): Promise<T> {
     await this.init();
@@ -151,7 +159,7 @@ export class Store {
   async createBoard(input: unknown): Promise<Board> {
     const values = boardInputSchema.parse(input);
     return this.locked(async () => {
-      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: this.now().toISOString(), columns: [], pointHistory: [] };
+      const board: Board = { ...values, schemaVersion: 1, id: randomUUID(), createdAt: this.now().toISOString(), columns: [], pointHistory: [], decisions: [], nextDecisionNumber: 1 };
       this.recordPoints(board);
       await this.write(board); return board;
     });
@@ -162,6 +170,93 @@ export class Store {
   }
   async deleteBoard(boardId: string) {
     return this.locked(async () => { await this.readBoard(boardId); await unlink(this.file(boardId)); return { deleted: true }; });
+  }
+  private decision(board: Board, decisionId: string) {
+    const decision = board.decisions.find(d => d.id === decisionId);
+    if (!decision) throw new StoreError('Décision introuvable', 404);
+    return decision;
+  }
+  private checkDecision(board: Board, id: string, values: DecisionInput) {
+    if (values.status === 'accepted' && (!values.outcome.trim() || !values.rationale.trim())) throw new StoreError('Renseignez la décision retenue et sa justification avant de la valider.');
+    if (values.status === 'superseded') {
+      const successor = board.decisions.find(d => d.id === values.supersededBy);
+      const existing = board.decisions.find(d => d.id === id);
+      const preservedLink = existing?.status === 'superseded' && existing.supersededBy === values.supersededBy;
+      if (!successor || successor.id === id || !preservedLink && (successor.deletedAt || successor.status !== 'accepted')) throw new StoreError('Choisissez une autre décision validée et active pour remplacer celle-ci.');
+    } else if (values.supersededBy !== null) throw new StoreError('Le successeur est réservé aux décisions remplacées.');
+    const links = new Set<string>();
+    for (const link of values.links) {
+      const key = `${link.kind}:${link.target}`;
+      if (links.has(key)) throw new StoreError('Lien dupliqué');
+      links.add(key);
+      if (link.kind === 'card' && !board.columns.some(c => c.cards.some(card => card.id === link.target))) {
+        // Keep historical links when a previously linked card was deleted.
+        if (!board.decisions.find(d => d.id === id)?.links.some(l => l.kind === 'card' && l.target === link.target)) throw new StoreError('La fiche liée doit appartenir à ce projet.');
+      }
+      if (link.kind === 'decision' && (link.target === id || !board.decisions.some(d => d.id === link.target))) throw new StoreError('Choisissez une autre décision de ce projet pour créer un lien.');
+      if (link.kind === 'url') {
+        try { if (!['https:', 'http:'].includes(new URL(link.target).protocol)) throw new Error(); }
+        catch { throw new StoreError('Les documents doivent utiliser une adresse HTTP ou HTTPS valide.'); }
+      }
+    }
+  }
+  async listDecisions(boardId: string, input: unknown = {}) {
+    const query = decisionQuerySchema.parse(input);
+    if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) throw new StoreError('La date de début doit précéder la date de fin.');
+    const board = await this.getBoard(boardId);
+    const decisions = filterDecisions(board.decisions, query).map(d => ({ ...d, authority: decisionAuthority(d) }));
+    return { decisions, matching: decisions.length, total: board.decisions.filter(d => !d.deletedAt).length, policy: decisionPolicy };
+  }
+  async getDecision(boardId: string, decisionId: string) {
+    const decision = this.decision(await this.getBoard(boardId), decisionId);
+    return { ...decision, authority: decisionAuthority(decision), policy: decisionPolicy };
+  }
+  async createDecision(boardId: string, input: unknown) {
+    const values = decisionInputSchema.parse(input);
+    return this.mutate(boardId, board => {
+      if (values.status === 'superseded') throw new StoreError('Créez la décision avant de la remplacer.');
+      const id = randomUUID(); this.checkDecision(board, id, values);
+      const at = this.now().toISOString();
+      const decision: Decision = { ...values, id, number: board.nextDecisionNumber++, createdAt: at, updatedAt: at, statusChangedAt: at, decidedAt: ['accepted', 'rejected'].includes(values.status) ? at : null, deletedAt: null, history: [{ at, action: 'created', fromStatus: null, snapshot: structuredClone(values) }] };
+      board.decisions.push(decision);
+      return { ...decision, authority: decisionAuthority(decision) };
+    });
+  }
+  async updateDecision(boardId: string, decisionId: string, input: unknown, expectedUpdatedAt?: string) {
+    const patch = decisionPatchSchema.parse(input);
+    return this.mutate(boardId, board => {
+      const decision = this.decision(board, decisionId);
+      this.checkDecisionVersion(decision, expectedUpdatedAt);
+      if (decision.deletedAt) throw new StoreError('Cette décision a été supprimée et son historique est en lecture seule.', 409);
+      const values = decisionInputSchema.parse({ ...decisionInputSnapshot(decision), ...patch });
+      if (values.status !== decision.status && !decisionTransitions[decision.status].includes(values.status)) throw new StoreError('Transition d’état non autorisée. Suivez le cycle de vie de la décision.');
+      this.checkDecision(board, decisionId, values);
+      if (JSON.stringify(values) === JSON.stringify(decisionInputSnapshot(decision))) return { ...decision, authority: decisionAuthority(decision) };
+      const at = new Date(Math.max(this.now().valueOf(), Date.parse(decision.updatedAt) + 1)).toISOString();
+      const previous = decision.status;
+      if (values.status !== previous) {
+        decision.statusChangedAt = at;
+        if (['accepted', 'rejected'].includes(values.status)) decision.decidedAt = at;
+      }
+      Object.assign(decision, values, { updatedAt: at });
+      decision.history.push({ at, action: 'updated', fromStatus: previous, snapshot: structuredClone(values) });
+      return { ...decision, authority: decisionAuthority(decision) };
+    });
+  }
+  private checkDecisionVersion(decision: Decision, expectedUpdatedAt?: string) {
+    if (expectedUpdatedAt && expectedUpdatedAt !== decision.updatedAt) throw new StoreError('Cette décision a changé. Fermez et rouvrez-la avant de réessayer.', 409);
+  }
+  async deleteDecision(boardId: string, decisionId: string, expectedUpdatedAt?: string) {
+    return this.mutate(boardId, board => {
+      const decision = this.decision(board, decisionId);
+      this.checkDecisionVersion(decision, expectedUpdatedAt);
+      if (!decision.deletedAt) {
+        const at = new Date(Math.max(this.now().valueOf(), Date.parse(decision.updatedAt) + 1)).toISOString();
+        decision.deletedAt = at; decision.updatedAt = at;
+        decision.history.push({ at, action: 'deleted', fromStatus: decision.status, snapshot: structuredClone(decisionInputSnapshot(decision)) });
+      }
+      return { deleted: true, retainedHistory: true, id: decision.id, number: decision.number };
+    });
   }
   async createColumn(boardId: string, input: unknown) {
     const values = columnInputSchema.parse(input);

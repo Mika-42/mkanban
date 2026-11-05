@@ -42,7 +42,7 @@ export function BoardGantt({ board, onCard, refresh }: { board: Board; onCard: (
     {(rangeError || error) && <div role="alert" className="form-error">{rangeError || error}</div>}
     {outside > 0 && !rangeError && <p className="hint gantt-outside">{outside} fiche{outside > 1 ? 's' : ''} hors de la période affichée. Utilisez « Cadrer les fiches » pour ajuster la vue.</p>}
     <div className="gantt-legend"><span><i className="planned" />Planifiée</span><span><i className="done" />Terminée</span><span><i className="conflict" />Conflit</span><span>→ Dépendance fin vers début</span><span className="gantt-drag-status" aria-live="polite">{busy ? 'Enregistrement…' : dragText}</span></div>
-    {!plan.tasks.length ? <div className="gantt-empty"><CalendarRange size={32} /><h3>Votre planning commence par une fiche.</h3><p>Créez vos fiches dans l’onglet Tableau, puis ajoutez leurs dates et leurs dépendances.</p></div> : svg && <div className={`gantt-canvas ${busy ? 'is-saving' : ''}`} aria-label="Planning interactif" onClick={e => {
+    {!plan.tasks.length ? <div className="gantt-empty"><CalendarRange size={32} /><h3>Votre planning commence par une fiche.</h3><p>Créez vos fiches dans l’onglet Kanban, puis ajoutez leurs dates et leurs dépendances.</p></div> : svg && <div className={`gantt-canvas ${busy ? 'is-saving' : ''}`} aria-label="Planning interactif" onClick={e => {
       if (suppressClick.current) { suppressClick.current = false; return; }
       const group = (e.target as Element).closest('[data-card-id]'); if (group && !busy) open(group.getAttribute('data-card-id')!);
     }} onKeyDown={e => {

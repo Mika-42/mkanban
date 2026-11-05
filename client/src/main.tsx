@@ -7,5 +7,6 @@ import './charts.css';
 import './gantt.css';
 import './card-actions.css';
 import './dialogs.css';
+import './decisions.css';
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

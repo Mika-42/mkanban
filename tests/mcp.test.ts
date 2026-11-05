@@ -21,7 +21,7 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   const client = new Client({ name: 'integration-test', version: '1.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   t.after(() => client.close());
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 18);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 23);
   async function call(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
     assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -81,6 +81,28 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   const apiPlan = await (await fetch(`${base}/api/boards/${board.id}/gantt`)).json(); assert.deepEqual(apiPlan, gantt);
   const apiSvg = await fetch(`${base}/api/boards/${board.id}/gantt?format=svg&startDate=2026-11-01&endDate=2026-11-15&dayWidth=10`); assert.equal(apiSvg.status, 200); assert.match(apiSvg.headers.get('content-type')!, /image\/svg\+xml/);
   const invalidSchedule = await fetch(`${base}/api/boards/${board.id}/schedule`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changes: [{ cardId: predecessor.id, startDate: '2026-12-01' }] }) }); assert.equal(invalidSchedule.status, 400);
+  const decision = await call('create_decision', { boardId: board.id, title: 'Stockage local', type: 'technical', context: '**Simple** et portable', links: [{ kind: 'card', target: predecessor.id }] });
+  assert.equal(decision.number, 1); assert.equal(decision.authority, 'contextual');
+  await call('update_decision', { boardId: board.id, decisionId: decision.id, status: 'discussing', expectedUpdatedAt: decision.updatedAt });
+  await call('update_decision', { boardId: board.id, decisionId: decision.id, status: 'proposed' });
+  const adopted = await call('update_decision', { boardId: board.id, decisionId: decision.id, status: 'accepted', outcome: 'Un JSON par projet', rationale: 'Facile à sauvegarder' });
+  assert.equal(adopted.authority, 'binding');
+  const viaDecisionRest = await (await fetch(`${base}/api/boards/${board.id}/decisions?statuses=accepted&types=technical`)).json();
+  assert.equal(viaDecisionRest.matching, 1); assert.equal(viaDecisionRest.decisions[0].id, decision.id);
+  const staleDecision = await fetch(`${base}/api/boards/${board.id}/decisions/${decision.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Obsolète', expectedUpdatedAt: decision.updatedAt }) }); assert.equal(staleDecision.status, 409);
+  const restCreated = await fetch(`${base}/api/boards/${board.id}/decisions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Navigation', type: 'functional' }) }); assert.equal(restCreated.status, 201);
+  const restDecision = await restCreated.json();
+  assert.equal((await call('list_decisions', { boardId: board.id, types: ['functional'] })).decisions[0].id, restDecision.id);
+  const detail = await call('get_decision', { boardId: board.id, decisionId: decision.id }); assert.equal(detail.history.length, 4);
+  const journalResource = await client.readResource({ uri: `kanban://boards/${board.id}/decisions` });
+  const journal = JSON.parse((journalResource.contents[0] as { text: string }).text); assert.ok(journal.policy.binding.includes('accepted')); assert.equal(journal.decisions.length, 2);
+  const boardWithDecisions = await call('get_board', { boardId: board.id }); assert.equal(boardWithDecisions.decisions[0].authority, 'binding'); assert.ok(boardWithDecisions.decisionPolicy.historical);
+  const invalidTransition = await client.callTool({ name: 'update_decision', arguments: { boardId: board.id, decisionId: decision.id, status: 'draft' } }); assert.equal(invalidTransition.isError, true);
+  await call('delete_decision', { boardId: board.id, decisionId: decision.id, expectedUpdatedAt: adopted.updatedAt });
+  assert.equal((await call('list_decisions', { boardId: board.id })).matching, 1);
+  const archived = await call('list_decisions', { boardId: board.id, deleted: 'only' }); assert.equal(archived.decisions[0].authority, 'historical'); assert.equal(archived.decisions[0].history.at(-1).action, 'deleted');
+  const boardResource = await client.readResource({ uri: `kanban://boards/${board.id}` }); assert.equal(JSON.parse((boardResource.contents[0] as { text: string }).text).decisions[0].authority, 'historical');
+  assert.equal((await fetch(`${base}/api/boards/${board.id}/decisions?dateFrom=2026-02-30`)).status, 400);
 });
 test('official stdio client reads and edits persisted JSON from a separate process', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mkanban-stdio-'));
@@ -101,4 +123,8 @@ test('official stdio client reads and edits persisted JSON from a separate proce
   const planned = await client.callTool({ name: 'auto_schedule', arguments: { boardId: board.id, projectStart: '2026-11-01', dryRun: false } }); assert.notEqual(planned.isError, true);
   const plan = await client.callTool({ name: 'get_gantt', arguments: { boardId: board.id } });
   assert.equal(JSON.parse((plan.content as { text: string }[])[0].text).tasks[1].startDate, '2026-11-04');
+  const decision = await client.callTool({ name: 'create_decision', arguments: { boardId: board.id, title: 'Une décision via stdio', type: 'functional', status: 'discussing' } }); assert.notEqual(decision.isError, true);
+  const persisted = (await store.getBoard(board.id)).decisions[0]; assert.equal(persisted.title, 'Une décision via stdio');
+  await store.updateDecision(board.id, persisted.id, { status: 'rejected', rationale: 'Historique commun' });
+  const journal = await client.callTool({ name: 'list_decisions', arguments: { boardId: board.id } }); assert.equal(JSON.parse((journal.content as { text: string }[])[0].text).decisions[0].authority, 'historical');
 });
