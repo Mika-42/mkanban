@@ -9,6 +9,7 @@ RUN --mount=type=secret,id=proxy_ca \
 COPY tsconfig.json vite.config.ts ./
 COPY client ./client
 COPY server ./server
+COPY shared ./shared
 RUN npm run build && npm prune --omit=dev --offline --no-audit --no-fund
 
 FROM node:24-bookworm-slim
@@ -17,6 +18,7 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/server ./server
+COPY --from=build --chown=node:node /app/shared ./shared
 COPY --from=build --chown=node:node /app/package.json ./package.json
 RUN mkdir -p /app/data/boards && chown -R node:node /app/data
 USER node

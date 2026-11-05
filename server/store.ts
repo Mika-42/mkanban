@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, unlink, open } from 'node:fs/promises';
 import path from 'node:path';
 import lockfile from 'proper-lockfile';
 import { z } from 'zod';
-import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, pointHistorySchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
+import { autoScheduleSchema, boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, pointHistorySchema, scheduleUpdateSchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
+import { buildGantt, orderedCards, planAutomatically } from '../shared/planning.js';
 
 export class StoreError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -26,6 +27,7 @@ export class Store {
     try {
       const board = storedBoardSchema.parse(JSON.parse(await readFile(this.file(id), 'utf8')));
       if (board.id !== id) throw new StoreError('Le nom du fichier ne correspond pas à son tableau', 500);
+      orderedCards(board);
       return board;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new StoreError('Tableau introuvable', 404);
@@ -83,6 +85,7 @@ export class Store {
       this.recordPoints(board);
       const result = change(board);
       this.normalize(board);
+      orderedCards(board);
       this.recordPoints(board);
       await this.write(board);
       return result;
@@ -105,6 +108,45 @@ export class Store {
       if (card) return { card, column };
     }
     throw new StoreError('Carte introuvable', 404);
+  }
+  private cleanDependencies(board: Board, removed: Set<string>) {
+    for (const card of board.columns.flatMap(c => c.cards)) {
+      if (card.dependencies.some(id => removed.has(id))) {
+        card.dependencies = card.dependencies.filter(id => !removed.has(id));
+        card.updatedAt = nextTimestamp(card.updatedAt);
+      }
+    }
+  }
+  private scheduleRevision(board: Board) {
+    return createHash('sha256').update(JSON.stringify(board.columns.flatMap(c => c.cards).map(c => [c.id, c.startDate, c.dueDate, c.dependencies, c.completed, c.updatedAt]))).digest('hex');
+  }
+  async getGantt(boardId: string) { return buildGantt(await this.getBoard(boardId)); }
+  async updateSchedule(boardId: string, input: unknown) {
+    const { changes } = scheduleUpdateSchema.parse(input);
+    if (new Set(changes.map(c => c.cardId)).size !== changes.length) throw new StoreError('Une fiche figure plusieurs fois dans la mise à jour');
+    return this.mutate(boardId, board => {
+      for (const { cardId, expectedUpdatedAt, ...patch } of changes) {
+        const { card } = this.card(board, cardId);
+        if (expectedUpdatedAt && card.updatedAt !== expectedUpdatedAt) throw new StoreError('Le planning a changé. Rechargez les fiches avant de réessayer.', 409);
+        Object.assign(card, patch, { updatedAt: nextTimestamp(card.updatedAt) });
+      }
+      return buildGantt(board);
+    });
+  }
+  async autoSchedule(boardId: string, input: unknown) {
+    const options = autoScheduleSchema.parse(input);
+    const plan = (board: Board) => {
+      const revision = this.scheduleRevision(board);
+      if (options.expectedRevision && options.expectedRevision !== revision) throw new StoreError('Le planning a changé. Générez un nouvel aperçu avant de confirmer.', 409);
+      const changes = planAutomatically(board, options);
+      return { revision, changes, applied: !options.dryRun };
+    };
+    if (options.dryRun) return plan(await this.getBoard(boardId));
+    return this.mutate(boardId, board => {
+      const result = plan(board);
+      for (const change of result.changes) Object.assign(this.card(board, change.cardId).card, { startDate: change.startDate, dueDate: change.dueDate, updatedAt: nextTimestamp(this.card(board, change.cardId).card.updatedAt) });
+      return result;
+    });
   }
   async createBoard(input: unknown): Promise<Board> {
     const values = boardInputSchema.parse(input);
@@ -160,6 +202,7 @@ export class Store {
         target.cards.push(...column.cards);
       }
       board.columns.splice(board.columns.indexOf(column), 1);
+      if (options.mode !== 'move') this.cleanDependencies(board, new Set(column.cards.map(c => c.id)));
       return { deleted: true, movedCards: options.mode === 'move' ? count : 0, deletedCards: options.mode === 'delete' ? count : 0 };
     });
   }
@@ -194,7 +237,9 @@ export class Store {
   async deleteCard(boardId: string, cardId: string) {
     return this.mutate(boardId, board => {
       const { card, column } = this.card(board, cardId);
-      column.cards.splice(column.cards.indexOf(card), 1); return { deleted: true };
+      column.cards.splice(column.cards.indexOf(card), 1);
+      this.cleanDependencies(board, new Set([cardId]));
+      return { deleted: true };
     });
   }
   async splitCard(boardId: string, cardId: string, input: unknown) {

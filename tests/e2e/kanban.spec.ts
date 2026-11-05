@@ -285,3 +285,83 @@ test('charts remain open and update after MCP changes, with a responsive layout 
   await client.close();
   await request.delete(`/api/boards/${board.id}`);
 });
+
+test('Gantt edits dates and dependencies, prevents circular links and previews automatic scheduling', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  const first = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Conception', points: 5 } })).json();
+  const second = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Livraison', points: 8 } })).json();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Conception', exact: true }).click();
+  await page.getByLabel('Début planifié', { exact: true }).fill('2026-11-01'); await page.getByLabel('Échéance', { exact: true }).fill('2026-11-03');
+  await page.getByRole('button', { name: 'Enregistrer', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Livraison', exact: true }).click();
+  await page.getByLabel('Début planifié', { exact: true }).fill('2026-11-02'); await page.getByLabel('Échéance', { exact: true }).fill('2026-11-04');
+  await page.getByRole('checkbox', { name: 'Dépend de : Conception', exact: true }).check();
+  await page.getByRole('button', { name: 'Enregistrer', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Gantt', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Diagramme de Gantt', exact: true })).toBeVisible();
+  await expect(page.locator('.gantt-summary .has-conflicts')).toContainText('1 conflit');
+  await page.getByRole('button', { name: 'Modifier Conception', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: 'Dépend de : Livraison', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Annuler', exact: true }).click();
+  await page.getByRole('button', { name: 'Planifier automatiquement', exact: true }).click();
+  await page.getByLabel('Début du projet', { exact: true }).fill('2026-11-01');
+  await page.getByRole('button', { name: 'Générer l’aperçu', exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Aperçu des changements de dates' })).toContainText('2026-11-04');
+  expect((await read()).columns[0].cards.find((c: { id: string }) => c.id === second.id).startDate).toBe('2026-11-02');
+  await page.getByRole('button', { name: 'Appliquer le planning', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.locator('.gantt-summary .has-conflicts')).toHaveCount(0);
+  const loaded = await read(); expect(loaded.columns[0].cards.find((c: { id: string }) => c.id === second.id).dueDate).toBe('2026-11-06');
+  expect(loaded.columns[0].cards.find((c: { id: string }) => c.id === first.id).dueDate).toBe('2026-11-03');
+  const csvPromise = page.waitForEvent('download'); await page.getByRole('button', { name: 'CSV', exact: true }).click();
+  expect(await readFile((await (await csvPromise).path())!, 'utf8')).toContain('Livraison');
+  const svgPromise = page.waitForEvent('download'); await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  expect(await readFile((await (await svgPromise).path())!, 'utf8')).toContain('gantt-arrow');
+  await request.delete(`/api/boards/${board.id}`);
+});
+
+test('Gantt bars move and resize, MCP edits refresh the view and dependency links can be removed', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  const first = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Amont', startDate: '2026-11-01', dueDate: '2026-11-03' } })).json();
+  const second = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Aval', startDate: '2026-11-05', dueDate: '2026-11-07', dependencies: [first.id] } })).json();
+  await page.goto('/'); await page.getByRole('tab', { name: 'Gantt', exact: true }).click();
+  await page.getByLabel('Au', { exact: true }).fill('2026-11-20');
+  const move = async (mode: string, pixels: number) => {
+    const handle = page.locator(`[data-card-id="${second.id}"] [data-gantt-bar="${mode}"]`); await handle.scrollIntoViewIfNeeded();
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + pixels, box.y + box.height / 2, { steps: 12 }); await page.mouse.up();
+  };
+  await move('move', 56);
+  await expect.poll(async () => (await read()).columns[0].cards.find((c: { id: string }) => c.id === second.id).startDate).toBe('2026-11-07');
+  await expect(page.locator('.gantt-canvas')).not.toHaveClass(/is-saving/);
+  await move('end', 28);
+  await expect.poll(async () => (await read()).columns[0].cards.find((c: { id: string }) => c.id === second.id).dueDate).toBe('2026-11-10');
+  await expect(page.locator('.gantt-canvas')).not.toHaveClass(/is-saving/);
+  const client = new Client({ name: 'gantt-browser', version: '1' }); await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:3100/mcp')));
+  await client.callTool({ name: 'update_schedule', arguments: { boardId: board.id, changes: [{ cardId: second.id, dueDate: '2026-11-11' }] } });
+  await expect(page.locator(`[data-card-id="${second.id}"]>title`)).toContainText('2026-11-11', { timeout: 8000 });
+  await page.getByRole('button', { name: 'Modifier Aval', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Dépend de : Amont', exact: true }).uncheck();
+  await page.getByRole('button', { name: 'Enregistrer', exact: true }).click(); await expect(page.locator('dialog')).toHaveCount(0);
+  const plan = await (await request.get(`/api/boards/${board.id}/gantt`)).json(); expect(plan.links).toHaveLength(0);
+  await client.close(); await request.delete(`/api/boards/${board.id}`);
+});
+
+test('Gantt handles empty boards, undated cards and milestones on mobile without document overflow', async ({ page, request }) => {
+  const { board, a } = await fixture(page, request);
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+  await page.getByRole('tab', { name: 'Gantt', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Votre planning commence par une fiche.', exact: true })).toBeVisible();
+  await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Sans dates' } });
+  await expect(page.getByRole('heading', { name: 'Fiches à planifier', exact: true })).toBeVisible({ timeout: 8000 });
+  await page.getByRole('button', { name: 'Sans dates', exact: true }).click();
+  await page.getByLabel('Échéance', { exact: true }).fill('2026-11-05'); await page.getByRole('button', { name: 'Enregistrer', exact: true }).click();
+  await expect(page.locator('dialog')).toHaveCount(0);
+  const plan = await (await request.get(`/api/boards/${board.id}/gantt`)).json(); expect(plan.tasks[0].milestone).toBe(true); expect(plan.tasks[0].duration).toBe(1);
+  await page.getByLabel('Échelle', { exact: true }).selectOption('10');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Planifier automatiquement', exact: true }).click();
+  expect(await page.locator('dialog').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await request.delete(`/api/boards/${board.id}`);
+});

@@ -2,8 +2,9 @@ import express from 'express';
 import { z, ZodError } from 'zod';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createMcpServer } from './mcp.js';
-import { moveSchema } from './schema.js';
+import { ganttQuerySchema, moveSchema } from './schema.js';
 import { Store, StoreError } from './store.js';
+import { ganttCsv, ganttRange, ganttSvg, PlanningError } from '../shared/planning.js';
 
 export function createApp(store: Store, options: { allowedHosts?: string[] } = {}) {
   const app = express();
@@ -24,6 +25,15 @@ export function createApp(store: Store, options: { allowedHosts?: string[] } = {
   app.get('/api/boards/:boardId', async (req, res) => res.json(await store.getBoard(req.params.boardId)));
   app.patch('/api/boards/:boardId', async (req, res) => res.json(await store.updateBoard(req.params.boardId, req.body)));
   app.delete('/api/boards/:boardId', async (req, res) => res.json(await store.deleteBoard(req.params.boardId)));
+  app.get('/api/boards/:boardId/gantt', async (req, res) => {
+    const options = ganttQuerySchema.parse({ ...req.query, dayWidth: req.query.dayWidth === undefined ? undefined : Number(req.query.dayWidth) });
+    const plan = await store.getGantt(req.params.boardId);
+    if (options.format === 'csv') { res.type('text/csv').send(ganttCsv(plan)); return; }
+    if (options.format === 'svg') { const today = options.today ?? new Date().toISOString().slice(0, 10); res.type('image/svg+xml').send(ganttSvg(plan, ganttRange(plan, today, options.startDate, options.endDate), options.dayWidth, today)); return; }
+    res.json(plan);
+  });
+  app.patch('/api/boards/:boardId/schedule', async (req, res) => res.json(await store.updateSchedule(req.params.boardId, req.body)));
+  app.post('/api/boards/:boardId/auto-schedule', async (req, res) => res.json(await store.autoSchedule(req.params.boardId, req.body)));
   app.post('/api/boards/:boardId/columns', async (req, res) => res.status(201).json(await store.createColumn(req.params.boardId, req.body)));
   app.patch('/api/boards/:boardId/columns/:columnId', async (req, res) => res.json(await store.updateColumn(req.params.boardId, req.params.columnId, req.body)));
   app.post('/api/boards/:boardId/columns/:columnId/move', async (req, res) => res.json(await store.moveColumn(req.params.boardId, req.params.columnId, z.number().int().nonnegative().parse(req.body.index))));
@@ -52,6 +62,7 @@ export function createApp(store: Store, options: { allowedHosts?: string[] } = {
     if (res.headersSent) return;
     if (err instanceof ZodError) { res.status(400).json({ error: err.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') }); return; }
     if (err instanceof StoreError) { res.status(err.status).json({ error: err.message }); return; }
+    if (err instanceof PlanningError) { res.status(400).json({ error: err.message }); return; }
     if (err instanceof SyntaxError) { res.status(400).json({ error: 'JSON invalide' }); return; }
     console.error(err);
     res.status(500).json({ error: 'Impossible de traiter la demande. Consultez les journaux du serveur.' });

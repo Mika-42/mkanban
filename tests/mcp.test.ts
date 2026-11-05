@@ -21,7 +21,7 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   const client = new Client({ name: 'integration-test', version: '1.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
   t.after(() => client.close());
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 15);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 18);
   async function call(name: string, args: Record<string, unknown> = {}) {
     const result = await client.callTool({ name, arguments: args });
     assert.notEqual(result.isError, true, JSON.stringify(result));
@@ -64,6 +64,23 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   assert.equal((await call('get_board', { boardId: board.id })).columns.length, 0);
   const empty = await call('create_column', { boardId: board.id, title: 'Vide' });
   assert.equal((await fetch(`${base}/api/boards/${board.id}/columns/${empty.id}`, { method: 'DELETE' })).status, 200);
+  const planning = await call('create_column', { boardId: board.id, title: 'Planning' });
+  const predecessor = await call('create_card', { boardId: board.id, columnId: planning.id, title: 'Conception', startDate: '2026-11-01', dueDate: '2026-11-03' });
+  const successor = await call('create_card', { boardId: board.id, columnId: planning.id, title: 'Livraison', startDate: '2026-11-02', dueDate: '2026-11-04', dependencies: [predecessor.id] });
+  assert.equal((await call('get_gantt', { boardId: board.id })).summary.conflicts, 1);
+  const cycle = await client.callTool({ name: 'update_schedule', arguments: { boardId: board.id, changes: [{ cardId: predecessor.id, dependencies: [successor.id] }] } });
+  assert.equal(cycle.isError, true);
+  await call('update_schedule', { boardId: board.id, changes: [{ cardId: predecessor.id, dueDate: '2026-11-04' }] });
+  const preview = await call('auto_schedule', { boardId: board.id, projectStart: '2026-11-01' });
+  assert.equal(preview.applied, false); assert.equal(preview.changes[0].startDate, '2026-11-05');
+  await call('auto_schedule', { boardId: board.id, projectStart: '2026-11-01', dryRun: false, expectedRevision: preview.revision });
+  const gantt = await call('get_gantt', { boardId: board.id });
+  assert.equal(gantt.summary.conflicts, 0); assert.deepEqual(gantt.tasks[1].dependencies, [predecessor.id]);
+  const csv = await call('get_gantt', { boardId: board.id, format: 'csv' }); assert.equal(csv.mimeType, 'text/csv'); assert.ok(csv.content.includes('Livraison'));
+  const svg = await call('get_gantt', { boardId: board.id, format: 'svg', startDate: '2026-11-01', endDate: '2026-11-15', dayWidth: 10 }); assert.equal(svg.mimeType, 'image/svg+xml'); assert.ok(svg.content.includes('<svg')); assert.ok(svg.content.includes('gantt-arrow'));
+  const apiPlan = await (await fetch(`${base}/api/boards/${board.id}/gantt`)).json(); assert.deepEqual(apiPlan, gantt);
+  const apiSvg = await fetch(`${base}/api/boards/${board.id}/gantt?format=svg&startDate=2026-11-01&endDate=2026-11-15&dayWidth=10`); assert.equal(apiSvg.status, 200); assert.match(apiSvg.headers.get('content-type')!, /image\/svg\+xml/);
+  const invalidSchedule = await fetch(`${base}/api/boards/${board.id}/schedule`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changes: [{ cardId: predecessor.id, startDate: '2026-12-01' }] }) }); assert.equal(invalidSchedule.status, 400);
 });
 test('official stdio client reads and edits persisted JSON from a separate process', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mkanban-stdio-'));
@@ -78,4 +95,10 @@ test('official stdio client reads and edits persisted JSON from a separate proce
   assert.notEqual(result.isError, true);
   const loaded = await store.getBoard(board.id); assert.equal(loaded.columns[0].cards[0].title, 'From separate process'); assert.equal(loaded.columns[0].cards[0].points, 5);
   assert.equal(loaded.pointHistory.at(-1)!.total, 5);
+  const source = loaded.columns[0].cards[0];
+  await client.callTool({ name: 'update_card', arguments: { boardId: board.id, cardId: source.id, startDate: '2026-11-01', dueDate: '2026-11-03' } });
+  await client.callTool({ name: 'create_card', arguments: { boardId: board.id, columnId: column.id, title: 'Suite', dependencies: [source.id] } });
+  const planned = await client.callTool({ name: 'auto_schedule', arguments: { boardId: board.id, projectStart: '2026-11-01', dryRun: false } }); assert.notEqual(planned.isError, true);
+  const plan = await client.callTool({ name: 'get_gantt', arguments: { boardId: board.id } });
+  assert.equal(JSON.parse((plan.content as { text: string }[])[0].text).tasks[1].startDate, '2026-11-04');
 });
