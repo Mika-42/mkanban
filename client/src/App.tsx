@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, Cable, ChartNoAxesCombined, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Cable, CalendarRange, ChartNoAxesCombined, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import type { Board, BoardSummary, Card } from '../../server/schema';
 import { api, createBoard } from './api';
 import { Avatar, Confirm, McpDialog, Modal, Spinner } from './components';
@@ -7,6 +7,7 @@ import { BoardView } from './BoardView';
 import { CardEditor } from './CardEditor';
 import { BoardsOverview } from './BoardsOverview';
 import { BoardCharts } from './BoardCharts';
+import { BoardGantt } from './BoardGantt';
 
 export function App() {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
@@ -19,7 +20,7 @@ export function App() {
   const [status, setStatus] = useState('all');
   const [flag, setFlag] = useState('');
   const [filters, setFilters] = useState(false);
-  const [view, setView] = useState<'table' | 'charts'>('table');
+  const [view, setView] = useState<'table' | 'charts' | 'gantt'>('table');
   const [card, setCard] = useState<Card | null>(null);
   const [mcp, setMcp] = useState(false);
   const [newBoard, setNewBoard] = useState(false);
@@ -94,11 +95,11 @@ export function App() {
         </section>
         <div className="board-toolbar"><div className="board-tabs" role="tablist" aria-label="Vues du tableau" onKeyDown={e => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
-          e.preventDefault(); const next = e.key === 'Home' ? 'table' : e.key === 'End' ? 'charts' : view === 'table' ? 'charts' : 'table';
-          setView(next); document.getElementById(next === 'table' ? 'board-tab' : 'charts-tab')?.focus();
-        }}><button id="board-tab" role="tab" aria-controls="board-panel" aria-selected={view === 'table'} tabIndex={view === 'table' ? 0 : -1} className={`view-tab ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}><LayoutGrid size={16} />Tableau<span>{board.columns.length}</span></button><button id="charts-tab" role="tab" aria-controls="charts-panel" aria-selected={view === 'charts'} tabIndex={view === 'charts' ? 0 : -1} className={`view-tab ${view === 'charts' ? 'active' : ''}`} onClick={() => setView('charts')}><ChartNoAxesCombined size={17} />Graphiques</button></div>{view === 'table' ? <div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le tableau JSON" aria-label="Exporter le tableau JSON" onClick={download}><ArrowDownToLine size={18} /></button></div> : <span className="chart-toolbar-note">Suivi en story points</span>}</div>
+          e.preventDefault(); const tabs = ['table', 'charts', 'gantt'] as const; const next = e.key === 'Home' ? 'table' : e.key === 'End' ? 'gantt' : tabs[(tabs.indexOf(view) + (e.key === 'ArrowLeft' ? 2 : 1)) % 3];
+          setView(next); document.getElementById(next === 'table' ? 'board-tab' : `${next}-tab`)?.focus();
+        }}><button id="board-tab" role="tab" aria-controls="board-panel" aria-selected={view === 'table'} tabIndex={view === 'table' ? 0 : -1} className={`view-tab ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}><LayoutGrid size={16} />Tableau<span>{board.columns.length}</span></button><button id="charts-tab" role="tab" aria-controls="charts-panel" aria-selected={view === 'charts'} tabIndex={view === 'charts' ? 0 : -1} className={`view-tab ${view === 'charts' ? 'active' : ''}`} onClick={() => setView('charts')}><ChartNoAxesCombined size={17} />Graphiques</button><button id="gantt-tab" role="tab" aria-controls="gantt-panel" aria-selected={view === 'gantt'} tabIndex={view === 'gantt' ? 0 : -1} className={`view-tab ${view === 'gantt' ? 'active' : ''}`} onClick={() => setView('gantt')}><CalendarRange size={17} />Gantt</button></div>{view === 'table' ? <div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le tableau JSON" aria-label="Exporter le tableau JSON" onClick={download}><ArrowDownToLine size={18} /></button></div> : <span className="chart-toolbar-note">{view === 'gantt' ? 'Planning et dépendances' : 'Suivi en story points'}</span>}</div>
         {view === 'table' && filters && <div className="filter-panel"><label>Membre<select value={member} onChange={e => setMember(e.target.value)}><option value="">Tous les membres</option>{members.map(m => <option key={m}>{m}</option>)}</select></label><label>Étiquette<select value={flag} onChange={e => setFlag(e.target.value)}><option value="">Toutes les étiquettes</option>{flags.map(f => <option key={f}>{f}</option>)}</select></label><label>État<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">Toutes les cartes</option><option value="active">Non terminées</option><option value="completed">Terminées</option></select></label><button className="text-button" onClick={() => { setMember(''); setFlag(''); setStatus('all'); }}>Réinitialiser</button><span className="hint">Les totaux des colonnes incluent toutes les cartes.</span></div>}
-        {view === 'table' ? <div className="board-panel" role="tabpanel" id="board-panel" aria-labelledby="board-tab"><BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} /></div> : <BoardCharts key={board.id} board={board} />}
+        {view === 'table' ? <div className="board-panel" role="tabpanel" id="board-panel" aria-labelledby="board-tab"><BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} /></div> : view === 'charts' ? <BoardCharts key={board.id} board={board} /> : <BoardGantt key={board.id} board={board} onCard={setCard} refresh={refresh} />}
         <footer className="board-footer"><span><span className="status-dot" />{saving ? 'Enregistrement…' : 'Enregistré localement'}<span className="footer-file"><FileJson size={13} />1 tableau = 1 fichier JSON</span></span><span>Faites glisser vos idées. Faites avancer vos projets.<Leaf size={13} /></span></footer>
       </>}
     </main>

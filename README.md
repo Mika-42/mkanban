@@ -46,9 +46,24 @@ docker compose cp mkanban:/app/data/boards ./sauvegarde-boards
 - Découpage : nouvelle carte adjacente, répartition des points, transfert des éléments de checklist choisis. Le total des points reste inchangé ; les autres propriétés et la description sont copiées. Enregistrer les modifications avant de scinder.
 - Recherche (`Ctrl/Cmd + K`) et filtres par membre, étiquette et état. Export JSON depuis la barre d’outils ou les paramètres du tableau.
 - Onglet **Graphiques** : burn-up et burn-down en story points, période personnalisable, exploration au survol ou au clavier, valeurs par jour et exports CSV/SVG.
+- Onglet **Gantt** : dates de début et de fin, jalons, liens entre fiches, conflits, déplacement/redimensionnement des barres et planification automatique avec aperçu. Ces opérations sont aussi disponibles via MCP.
 - Suppressions confirmées. Pour une colonne non vide, choisir de déplacer toutes ses fiches à la fin d’une autre colonne du même tableau, ou de supprimer définitivement la colonne et ses fiches. Aucune option n’est choisie automatiquement. Le transfert conserve l’ordre, les propriétés et les points des fiches ; il est enregistré avec la suppression de la colonne en une seule écriture JSON. Pour la dernière colonne du tableau, seule la suppression confirmée des fiches est proposée.
 
 Les données sont enregistrées côté serveur à chaque action. Dans le détail d’une carte, cliquer sur **Enregistrer** pour appliquer les modifications. Les changements MCP apparaissent dans le navigateur sous environ 2,5 secondes. Si une carte a changé depuis son ouverture, l’enregistrement du brouillon est refusé : fermer et rouvrir la carte pour récupérer la version courante.
+
+## Gantt et dépendances
+
+Ouvrir l’onglet **Gantt** dans un tableau. Dans le détail d’une fiche, la section **Planning et dépendances** permet de renseigner le début planifié, l’échéance et les prédécesseurs. L’échéance existante est la date de fin : aucune deuxième date de fin n’est ajoutée. Sans date, la fiche figure dans « Fiches à planifier ». Avec une seule date, elle est affichée comme un jalon d’un jour.
+
+Les dates sont inclusives et les durées sont des **jours calendaires**, week-ends compris. Les liens sont de type **fin → début** : un successeur commence au plus tôt le lendemain de la fin de tous ses prédécesseurs. Les liens vers soi-même, les doublons, les cycles et les références à un autre tableau sont refusés côté serveur, quelle que soit l’origine de la modification.
+
+Le Gantt affiche les liens, les fiches qui attendent des prédécesseurs non terminés et les conflits de dates. Les conflits restent visibles sans déplacer automatiquement les fiches. Une dépendance signale le blocage ; elle n’empêche pas de marquer manuellement une fiche comme terminée. Cliquer sur une ligne (ou utiliser Entrée/Espace au clavier) ouvre la fiche. Glisser une barre décale ses dates en conservant sa durée ; ses poignées ajustent le début ou la fin. Les dates restent également éditables dans le formulaire de la fiche. Des dates inversées sont refusées.
+
+Le sélecteur d’échelle propose Jour, Semaine et Mois. Les dates de la vue et « Cadrer les fiches » permettent de naviguer dans le planning ; les échelles changent uniquement son affichage. Le diagramme défile horizontalement et verticalement, y compris sur mobile. L’export SVG utilise la période et l’échelle affichées ; le CSV contient toutes les fiches avec dates, durées, prédécesseurs, blocages et conflits.
+
+**Planifier automatiquement** génère d’abord un aperçu. L’algorithme parcourt les dépendances dans l’ordre, conserve les durées existantes et considère les dates de début actuelles comme des bornes minimales. Une fiche sans date reçoit la durée par défaut choisie. Les fiches terminées restent fixes, sauf si l’option de les inclure est cochée. Si un prédécesseur terminé n’a aucune date, il faut le dater ou inclure les fiches terminées. Après confirmation, les changements sont appliqués en une seule écriture sous verrou ; si une fiche a changé depuis l’aperçu, celui-ci est refusé et doit être régénéré. Les points et l’état terminé ne changent pas.
+
+Le stockage ajoute `startDate` (date ou `null`) et `dependencies` (identifiants des prédécesseurs) à chaque fiche, dans le même JSON. Les anciennes fiches restent compatibles : début vide et liste de dépendances vide par défaut. Supprimer une fiche ou une colonne avec ses fiches retire les liens devenus orphelins et actualise les versions des fiches concernées. Scinder une fiche copie ses dates et ses prédécesseurs vers la nouvelle fiche ; les successeurs existants continuent de référencer la fiche originale.
 
 ## Burn-up et burn-down
 
@@ -130,19 +145,29 @@ Le serveur web n’est pas nécessaire pour stdio. Quand les deux sont utilisés
 
 ### Outils et ressources
 
-15 outils :
+18 outils :
 
 | Objet | Outils |
 | --- | --- |
 | Tableaux | `list_boards`, `get_board`, `create_board`, `update_board`, `delete_board` |
 | Colonnes | `create_column`, `update_column`, `move_column`, `delete_column` |
 | Cartes | `get_card`, `create_card`, `update_card`, `move_card`, `delete_card`, `split_card` |
+| Planning | `get_gantt`, `update_schedule`, `auto_schedule` |
 
 Ressources : `kanban://boards` et `kanban://boards/{boardId}`. `get_board` expose aussi les compteurs et points par colonne.
 
 Les mises à jour sont partielles. `update_card` remplace les listes fournies (`members`, `flags`, `checklist`) ; lire d’abord la carte pour les compléter. `expectedUpdatedAt` permet de refuser une modification obsolète. Les positions sont des index commençant à 0. Lors d’un déplacement de carte, l’index est celui de la destination après retrait de la carte. Les éléments de checklist doivent avoir un identifiant unique. Les dates utilisent `YYYY-MM-DD`.
 
 `delete_column` protège par défaut les colonnes non vides. Pour transférer les fiches avant suppression, fournir `options: { "mode": "move", "targetColumnId": "<id-destination>" }`. Pour confirmer leur suppression définitive, lire la colonne puis fournir `options: { "mode": "delete", "expectedCardIds": ["<id-carte>"] }` avec tous ses identifiants de cartes actuels. Si la liste de cartes a changé entre-temps, la suppression est refusée. L’API HTTP accepte les mêmes options directement dans le corps JSON du `DELETE /api/boards/{boardId}/columns/{columnId}`. Une colonne vide peut toujours être supprimée sans options.
+
+Toutes les opérations du Gantt sont accessibles par MCP :
+
+- `create_card` et `update_card` acceptent `startDate`, `dueDate` et `dependencies`. Envoyer `null` pour retirer une date et `[]` pour retirer tous les prédécesseurs.
+- `get_gantt` retourne toutes les fiches, les liens `finish_to_start`, les durées, `blockedBy`, les conflits et les compteurs. `format: "csv"` ou `format: "svg"` retourne `{ mimeType, content }` avec le fichier complet en texte. Le SVG accepte `startDate`, `endDate` et `dayWidth` (28 pour Jour, 10 pour Semaine, 3 pour Mois ; plage 2–80). Les périodes de vue sont limitées à 10 ans.
+- `update_schedule` accepte `changes: [{ cardId, startDate?, dueDate?, dependencies?, expectedUpdatedAt? }]` pour modifier jusqu’à 1 000 fiches en une opération atomique. Le graphe final est validé, ce qui permet de remplacer plusieurs liens simultanément sans cycle intermédiaire. Un conflit de version annule toute la mise à jour.
+- `auto_schedule` accepte `projectStart`, `defaultDurationDays` (1 par défaut), `includeCompleted` (faux par défaut) et `dryRun` (vrai par défaut). Lire d’abord l’aperçu et sa `revision`, puis confirmer avec `dryRun: false` et `expectedRevision` égal à cette révision. L’application et MCP utilisent exactement le même algorithme et les mêmes règles de validation.
+
+L’API HTTP fournit les équivalents : `GET /api/boards/{boardId}/gantt` (paramètres d’export dans la query), `PATCH /api/boards/{boardId}/schedule` et `POST /api/boards/{boardId}/auto-schedule`. Par exemple, un assistant peut créer deux fiches, déclarer la seconde dépendante de la première, prévisualiser leur planification, la confirmer puis obtenir le SVG, sans passer par le navigateur.
 
 Exemple de requête à votre assistant : « Lis le tableau Lancement produit. Scinde la carte Dessiner les premiers écrans en deux cartes, transfère la tâche Version mobile et 2 points à la nouvelle, puis place-la dans À faire. »
 
@@ -172,4 +197,4 @@ npm run test:e2e
 
 Les tests de service vérifient les fichiers JSON, la persistance, les écritures concurrentes, les déplacements, le découpage, les entrées invalides, les conflits, le transfert ou la suppression des fiches d’une colonne et le protocole réel MCP HTTP et stdio. Ils couvrent aussi l’historique des points, la migration des anciens tableaux, les changements de fuseau, l’absence d’historique et les périodes futures ou invalides. Les tests Chromium vérifient les propriétés, le rendu Markdown, les checklists, les déplacements des cartes et colonnes, l’export, les modifications IA, la vue d’ensemble des tableaux, les confirmations de suppression, les graphiques et le mobile. Ils utilisent le port 3100 et des données isolées sous `test-results/boards`. `CHROMIUM_PATH` permet de choisir un exécutable ; `/usr/bin/chromium` est utilisé s’il est présent.
 
-Structure : `client/src` (React), `server/store.ts` (JSON et règles métier), `server/app.ts` (API HTTP), `server/mcp.ts` (outils MCP), `server/stdio.ts` (transport stdio).
+Structure : `client/src` (React), `shared/planning.ts` (graphe, calculs et exports Gantt communs au navigateur et au serveur), `server/store.ts` (JSON et règles métier), `server/app.ts` (API HTTP), `server/mcp.ts` (outils MCP), `server/stdio.ts` (transport stdio).
