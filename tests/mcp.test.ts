@@ -50,6 +50,19 @@ test('REST and official MCP HTTP client share JSON data, with errors and resourc
   });
   assert.equal(badHost, 403);
   const badDate = await fetch(`${base}/api/boards/${board.id}/cards/${card.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: '2026-02-30' }) }); assert.equal(badDate.status, 400);
+  const protectedColumn = await client.callTool({ name: 'delete_column', arguments: { boardId: board.id, columnId: column.id } });
+  assert.equal(protectedColumn.isError, true);
+  const target = await call('create_column', { boardId: board.id, title: 'Destination' });
+  await call('delete_column', { boardId: board.id, columnId: column.id, options: { mode: 'move', targetColumnId: target.id } });
+  const transferred = await call('get_board', { boardId: board.id });
+  assert.equal(transferred.columns.length, 1); assert.equal(transferred.columns[0].totalPoints, 8);
+  const staleDelete = await fetch(`${base}/api/boards/${board.id}/columns/${target.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'delete', expectedCardIds: [] }) });
+  assert.equal(staleDelete.status, 409);
+  const deleted = await fetch(`${base}/api/boards/${board.id}/columns/${target.id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'delete', expectedCardIds: [card.id, split.created.id] }) });
+  assert.equal(deleted.status, 200);
+  assert.equal((await call('get_board', { boardId: board.id })).columns.length, 0);
+  const empty = await call('create_column', { boardId: board.id, title: 'Vide' });
+  assert.equal((await fetch(`${base}/api/boards/${board.id}/columns/${empty.id}`, { method: 'DELETE' })).status, 200);
 });
 test('official stdio client reads and edits persisted JSON from a separate process', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mkanban-stdio-'));

@@ -20,6 +20,11 @@ export const cardInputSchema = z.object({
 export const cardPatchSchema = cardInputSchema.partial();
 export const boardInputSchema = z.object({ title, description: z.string().max(1000).default(''), color: z.enum(['violet', 'blue', 'green', 'rose']).default('violet') });
 export const columnInputSchema = z.object({ title, color: z.enum(['gray', 'blue', 'violet', 'green', 'orange', 'rose']).default('gray') });
+export const columnDeletionSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('empty') }),
+  z.object({ mode: z.literal('move'), targetColumnId: idSchema }),
+  z.object({ mode: z.literal('delete'), expectedCardIds: z.array(idSchema) }),
+]);
 export const moveSchema = z.object({ index: z.number().int().min(0), columnId: idSchema });
 export const splitSchema = z.object({ title, points: z.number().int().min(0).max(999), checklistIds: z.array(idSchema).default([]) });
 

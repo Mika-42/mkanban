@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, idSchema, splitSchema } from './schema.js';
+import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, splitSchema } from './schema.js';
 import { Store } from './store.js';
 
 export function createMcpServer(store: Store) {
@@ -28,7 +28,7 @@ export function createMcpServer(store: Store) {
   server.registerTool('create_column', { description: 'Append a column to a board.', inputSchema: { boardId, ...columnInputSchema.shape }, annotations: write }, ({ boardId, ...values }) => result(() => store.createColumn(boardId, values)));
   server.registerTool('update_column', { description: 'Rename or recolor a column.', inputSchema: { boardId, columnId, ...columnInputSchema.partial().shape }, annotations: write }, ({ boardId, columnId, ...patch }) => result(() => store.updateColumn(boardId, columnId, patch)));
   server.registerTool('move_column', { description: 'Move a column to a zero-based index.', inputSchema: { boardId, columnId, index: z.number().int().nonnegative() }, annotations: write }, ({ boardId, columnId, index }) => result(() => store.moveColumn(boardId, columnId, index)));
-  server.registerTool('delete_column', { description: 'Delete an empty column. Nonempty columns are protected.', inputSchema: { boardId, columnId }, annotations: destructive }, ({ boardId, columnId }) => result(() => store.deleteColumn(boardId, columnId)));
+  server.registerTool('delete_column', { description: 'Delete a column. By default it must be empty. With user confirmation, options mode=move transfers all cards to targetColumnId before deleting, or mode=delete permanently removes the cards. For mode=delete, read the column first and pass its exact current card IDs as expectedCardIds; concurrent additions/removals are rejected.', inputSchema: { boardId, columnId, options: columnDeletionSchema.optional() }, annotations: destructive }, ({ boardId, columnId, options }) => result(() => store.deleteColumn(boardId, columnId, options)));
   server.registerTool('get_card', { description: 'Read one card, including Markdown and checklist.', inputSchema: { boardId, cardId }, annotations: read }, ({ boardId, cardId }) => result(() => store.getCard(boardId, cardId)));
   server.registerTool('create_card', { description: 'Create a card. Checklist entries need unique IDs (use UUIDs). Dates use YYYY-MM-DD.', inputSchema: { boardId, columnId, ...cardInputSchema.shape }, annotations: write }, ({ boardId, columnId, ...values }) => result(() => store.createCard(boardId, columnId, values)));
   server.registerTool('update_card', { description: 'Patch card fields, completion, story points, flags, members or checklist. Arrays replace the existing array. Read first. expectedUpdatedAt optionally protects against concurrent edits.', inputSchema: { boardId, cardId, expectedUpdatedAt: z.string().optional(), ...cardPatchSchema.shape }, annotations: write }, ({ boardId, cardId, expectedUpdatedAt, ...patch }) => result(() => store.updateCard(boardId, cardId, patch, expectedUpdatedAt)));

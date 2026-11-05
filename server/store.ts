@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rename, unlink, open } from 'node:fs/promises
 import path from 'node:path';
 import lockfile from 'proper-lockfile';
 import { z } from 'zod';
-import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, idSchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
+import { boardInputSchema, cardInputSchema, cardPatchSchema, columnInputSchema, columnDeletionSchema, idSchema, splitSchema, type Board, type BoardSummary, type Card, type Column } from './schema.js';
 
 export class StoreError extends Error {
   constructor(message: string, public status = 400) { super(message); }
@@ -113,11 +113,26 @@ export class Store {
       return column;
     });
   }
-  async deleteColumn(boardId: string, columnId: string) {
+  async deleteColumn(boardId: string, columnId: string, input: unknown = { mode: 'empty' }) {
+    const options = columnDeletionSchema.parse(input);
     return this.mutate(boardId, board => {
       const column = this.column(board, columnId);
-      if (column.cards.length) throw new StoreError('Déplacez ou supprimez les cartes avant de supprimer cette colonne', 409);
-      board.columns.splice(board.columns.indexOf(column), 1); return { deleted: true };
+      const count = column.cards.length;
+      if (options.mode === 'empty' && count) throw new StoreError('Déplacez les cartes ou confirmez leur suppression avant de supprimer cette colonne', 409);
+      if (options.mode === 'delete') {
+        const expected = new Set(options.expectedCardIds);
+        if (expected.size !== options.expectedCardIds.length || expected.size !== count || column.cards.some(card => !expected.has(card.id))) {
+          throw new StoreError('Les fiches de cette colonne ont changé. Vérifiez son contenu avant de confirmer à nouveau.', 409);
+        }
+      }
+      if (options.mode === 'move') {
+        if (options.targetColumnId === columnId) throw new StoreError('Choisissez une autre colonne pour déplacer les fiches');
+        const target = this.column(board, options.targetColumnId);
+        for (const card of column.cards) card.updatedAt = nextTimestamp(card.updatedAt);
+        target.cards.push(...column.cards);
+      }
+      board.columns.splice(board.columns.indexOf(column), 1);
+      return { deleted: true, movedCards: options.mode === 'move' ? count : 0, deletedCards: options.mode === 'delete' ? count : 0 };
     });
   }
   async getCard(boardId: string, cardId: string) { return this.card(await this.getBoard(boardId), cardId).card; }

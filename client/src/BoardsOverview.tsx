@@ -1,0 +1,17 @@
+import { useState } from 'react';
+import { ArrowUpRight, FileJson, LayoutGrid, Plus, Search, X } from 'lucide-react';
+import type { BoardSummary } from '../../server/schema';
+
+export function BoardsOverview({ boards, onOpen, onCreate }: { boards: BoardSummary[]; onOpen: (id: string) => void; onCreate: () => void }) {
+  const [search, setSearch] = useState('');
+  const visible = boards.filter(b => `${b.title} ${b.description}`.toLocaleLowerCase('fr').includes(search.trim().toLocaleLowerCase('fr')));
+  return <section className="boards-overview" aria-label="Vue d’ensemble des tableaux">
+    <div className="overview-heading"><div><div className="board-eyebrow"><LayoutGrid size={13} />MON ESPACE</div><h1>Mes tableaux</h1><p>Tous vos projets, au même endroit. Choisissez où faire avancer vos idées.</p></div><button className="button primary" onClick={onCreate}><Plus size={17} />Nouveau tableau</button></div>
+    <div className="overview-toolbar"><span>{boards.length} tableau{boards.length > 1 ? 'x' : ''}</span><div className="search-field"><Search size={16} /><input aria-label="Rechercher un tableau" placeholder="Rechercher un tableau…" value={search} onChange={e => setSearch(e.target.value)} />{search && <button aria-label="Effacer la recherche de tableaux" onClick={() => setSearch('')}><X size={14} /></button>}</div></div>
+    <div className="boards-grid">{visible.map(board => <button className={`board-tile ${board.color}`} key={board.id} aria-label={`Ouvrir le tableau ${board.title}`} onClick={() => onOpen(board.id)}>
+      <div className="board-tile-cover" aria-hidden="true"><div className="board-tile-preview"><span><i /><i /></span><span><i /></span><span><i /><i /></span></div><span className="board-tile-open"><ArrowUpRight size={19} /></span></div>
+      <div className="board-tile-content"><h2>{board.title}</h2><p>{board.description || 'Un espace pour vos prochaines idées.'}</p><span><FileJson size={13} />Créé le {new Date(board.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}</span></div>
+    </button>)}{!search.trim() && <button className="new-board-tile" aria-label="Créer un autre tableau" onClick={onCreate}><span><Plus size={25} /></span><strong>Un nouveau projet ?</strong><span>Créer un tableau</span></button>}</div>
+    {!visible.length && <div className="overview-no-results"><Search size={25} /><h2>Aucun tableau trouvé</h2><p>Essayez un autre nom ou une autre description.</p><button className="text-button" onClick={() => setSearch('')}>Afficher tous les tableaux</button></div>}
+  </section>;
+}

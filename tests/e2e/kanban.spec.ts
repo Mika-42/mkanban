@@ -3,10 +3,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 async function fixture(page: Page, request: APIRequestContext) {
-  const board = await (await request.post('/api/boards', { data: { title: 'Tableau de test' } })).json();
+  const board = await (await request.post('/api/boards', { data: { title: `Tableau de test ${crypto.randomUUID().slice(0, 8)}` } })).json();
   const a = await (await request.post(`/api/boards/${board.id}/columns`, { data: { title: 'À faire' } })).json();
   const b = await (await request.post(`/api/boards/${board.id}/columns`, { data: { title: 'En cours' } })).json();
-  await page.addInitScript(id => localStorage.setItem('mkanban.board', id), board.id);
+  await page.addInitScript(id => {
+    if (!sessionStorage.getItem('mkanban.test.initialized')) {
+      localStorage.setItem('mkanban.board', id);
+      sessionStorage.setItem('mkanban.test.initialized', 'true');
+    }
+  }, board.id);
   return { board, a, b, read: async () => (await request.get(`/api/boards/${board.id}`)).json() };
 }
 
@@ -129,4 +134,82 @@ test('mobile navigation, new boards and search work without document overflow', 
   await expect(page.getByText('Aucune carte ne correspond')).toHaveCount(4);
   await page.screenshot({ path: '/tmp/mkanban-mobile.png', fullPage: true, animations: 'disabled' });
   await request.delete(`/api/boards/${id}`);
+});
+
+test('workspace overview lists and opens boards, remains open after refresh, and handles board deletion', async ({ page, request }) => {
+  const { board } = await fixture(page, request);
+  const other = await (await request.post('/api/boards', { data: { title: 'Un autre projet', description: 'Retrouver ce projet en recherche' } })).json();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Mon espace', exact: true }).click();
+  const overview = page.getByRole('region', { name: 'Vue d’ensemble des tableaux' });
+  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Colonne À faire', exact: true })).toHaveCount(0);
+  // Polling used to force the first board open again. Wait for one actual refresh.
+  await page.waitForResponse(response => response.url().endsWith('/api/boards') && response.request().method() === 'GET');
+  await expect(overview).toBeVisible();
+  await page.reload();
+  await expect(overview).toBeVisible();
+  await page.getByLabel('Rechercher un tableau', { exact: true }).fill('en recherche');
+  await expect(overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true })).toBeVisible();
+  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Effacer la recherche de tableaux', exact: true }).click();
+  await overview.getByRole('button', { name: 'Ouvrir le tableau Un autre projet', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /^Un autre projet/ })).toBeVisible();
+  await page.getByRole('button', { name: /^Mes tableaux/ }).click();
+  await expect(overview).toBeVisible();
+  await overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true }).click();
+  await request.delete(`/api/boards/${board.id}`);
+  await expect(overview).toBeVisible({ timeout: 8000 });
+  await expect(overview.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true })).toHaveCount(0);
+  await request.delete(`/api/boards/${other.id}`);
+});
+
+test('column deletion can be cancelled or move all cards without losing their details', async ({ page, request }) => {
+  const { board, a, b, read } = await fixture(page, request);
+  const card = await (await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'À conserver', points: 5, description: '**Description à garder**', checklist: [{ id: 'keep', text: 'À vérifier', done: true }], flags: ['Important'], members: ['Mika'] } })).json();
+  await request.post(`/api/boards/${board.id}/columns/${b.id}/cards`, { data: { title: 'Déjà présente', points: 3 } });
+  await page.goto('/');
+  const openDelete = async () => { await page.getByRole('button', { name: 'Options de À faire', exact: true }).click(); await page.getByRole('button', { name: 'Supprimer la colonne', exact: true }).click(); };
+  await openDelete();
+  await expect(page.getByRole('button', { name: 'Confirmer la suppression', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Annuler', exact: true }).click();
+  expect((await read()).columns).toHaveLength(2);
+  await openDelete();
+  await page.getByRole('radio', { name: /Déplacer toutes les fiches/ }).check();
+  await page.getByLabel('Colonne de destination', { exact: true }).selectOption(b.id);
+  await page.getByRole('button', { name: 'Déplacer et supprimer la colonne', exact: true }).click();
+  await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Colonne À faire', exact: true })).toHaveCount(0);
+  const target = page.getByRole('region', { name: 'Colonne En cours', exact: true });
+  await expect(target.locator('.column-count')).toHaveText('2'); await expect(target.locator('.column-points')).toHaveText('8');
+  const loaded = await read();
+  expect(loaded.columns).toHaveLength(1);
+  expect(loaded.columns[0].cards.map((c: { title: string }) => c.title)).toEqual(['Déjà présente', 'À conserver']);
+  expect(loaded.columns[0].cards[1]).toMatchObject({ id: card.id, description: card.description, checklist: card.checklist, flags: card.flags, members: card.members, columnId: b.id });
+  await request.delete(`/api/boards/${board.id}`);
+});
+
+test('mobile workspace navigation and confirmed deletion of the last populated column', async ({ page, request }) => {
+  const { board, a, b, read } = await fixture(page, request);
+  await request.delete(`/api/boards/${board.id}/columns/${b.id}`);
+  await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Fiche à supprimer', points: 5 } });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Ouvrir la navigation', exact: true }).click();
+  await page.getByRole('button', { name: 'Mon espace', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Mes tableaux', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole('button', { name: `Ouvrir le tableau ${board.title}`, exact: true }).click();
+  await page.getByRole('button', { name: 'Options de À faire', exact: true }).click();
+  await page.getByRole('button', { name: 'Supprimer la colonne', exact: true }).click();
+  await expect(page.getByRole('radio', { name: /Déplacer toutes les fiches/ })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Confirmer la suppression', exact: true })).toBeDisabled();
+  await page.getByRole('radio', { name: /Supprimer toutes les fiches/ }).check();
+  const dialog = page.locator('dialog');
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  await page.getByRole('button', { name: 'Supprimer la colonne et ses fiches', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await read()).columns).toHaveLength(0);
+  await request.delete(`/api/boards/${board.id}`);
 });

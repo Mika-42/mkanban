@@ -5,14 +5,16 @@ import { CSS } from '@dnd-kit/utilities';
 import { Plus, MoreHorizontal, GripVertical, Check, CalendarDays, AlignLeft, CheckSquare2, Diamond, Pencil, Trash2, ArrowLeft, ArrowRight } from 'lucide-react';
 import type { Board, Card, Column } from '../../server/schema';
 import { api } from './api';
-import { Avatar, Confirm, Modal, Spinner } from './components';
+import { Avatar, Modal, Spinner } from './components';
 import { flagColor } from './CardEditor';
+import { DeleteColumnDialog } from './DeleteColumnDialog';
 
 export function BoardView({ board, search, member, status, flag, onCard, refresh, run }: { board: Board; search: string; member: string; status: string; flag: string; onCard: (card: Card) => void; refresh: () => Promise<void>; run: (fn: () => Promise<unknown>) => Promise<void> }) {
   const [dragged, setDragged] = useState<{ type: string; id: string } | null>(null);
   const [columnForm, setColumnForm] = useState<Column | 'new' | null>(null);
   const [newCardColumn, setNewCardColumn] = useState<Column | null>(null);
-  const [deleteColumn, setDeleteColumn] = useState<Column | null>(null);
+  const [deleteColumnId, setDeleteColumnId] = useState<string | null>(null);
+  const deleteColumn = board.columns.find(c => c.id === deleteColumnId);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 7 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const collision: CollisionDetection = args => {
     const filtered = { ...args, droppableContainers: args.droppableContainers.filter(c => args.active.data.current?.type !== 'column' || c.data.current?.type === 'column') };
@@ -39,13 +41,13 @@ export function BoardView({ board, search, member, status, flag, onCard, refresh
   return <>
     <DndContext sensors={sensors} collisionDetection={collision} onDragStart={({ active }) => setDragged({ id: String(active.id), type: active.data.current?.type || 'card' })} onDragEnd={onDragEnd} onDragCancel={() => setDragged(null)} accessibility={{ screenReaderInstructions: { draggable: 'Pour déplacer, appuyez sur Espace, utilisez les flèches puis Espace pour déposer. Échap pour annuler.' } }}>
       <div className="board-scroll"><div className="columns"><SortableContext items={board.columns.map(c => c.id)} strategy={horizontalListSortingStrategy}>
-        {board.columns.map((column, index) => <BoardColumn key={column.id} column={column} index={index} count={board.columns.length} cards={column.cards.filter(visible)} filtered={filtered} onCard={onCard} onAdd={() => setNewCardColumn(column)} onEdit={() => setColumnForm(column)} onDelete={() => setDeleteColumn(column)} onMove={index => void run(() => api(`/boards/${board.id}/columns/${column.id}/move`, 'POST', { index }))} onComplete={card => void run(() => api(`/boards/${board.id}/cards/${card.id}`, 'PATCH', { completed: !card.completed, expectedUpdatedAt: card.updatedAt }))} />)}
+        {board.columns.map((column, index) => <BoardColumn key={column.id} column={column} index={index} count={board.columns.length} cards={column.cards.filter(visible)} filtered={filtered} onCard={onCard} onAdd={() => setNewCardColumn(column)} onEdit={() => setColumnForm(column)} onDelete={() => setDeleteColumnId(column.id)} onMove={index => void run(() => api(`/boards/${board.id}/columns/${column.id}/move`, 'POST', { index }))} onComplete={card => void run(() => api(`/boards/${board.id}/cards/${card.id}`, 'PATCH', { completed: !card.completed, expectedUpdatedAt: card.updatedAt }))} />)}
       </SortableContext><button className="add-column" onClick={() => setColumnForm('new')}><Plus size={18} />Ajouter une colonne</button></div></div>
       <DragOverlay>{activeCard ? <CardContent card={activeCard} overlay /> : dragged?.type === 'column' ? <div className="column-overlay">{board.columns.find(c => c.id === dragged.id)?.title}</div> : null}</DragOverlay>
     </DndContext>
     {columnForm && <ColumnForm column={columnForm === 'new' ? null : columnForm} boardId={board.id} onClose={() => setColumnForm(null)} onSaved={refresh} />}
     {newCardColumn && <NewCard column={newCardColumn} boardId={board.id} onClose={() => setNewCardColumn(null)} onSaved={async card => { await refresh(); setNewCardColumn(null); onCard(card); }} />}
-    {deleteColumn && <Confirm title={`Supprimer « ${deleteColumn.title} » ?`} description={deleteColumn.cards.length ? 'Cette colonne contient des cartes. Déplacez-les ou supprimez-les avant de supprimer la colonne.' : 'Cette colonne vide sera définitivement supprimée.'} busy={false} onClose={() => setDeleteColumn(null)} onConfirm={() => { if (deleteColumn.cards.length) return; void run(() => api(`/boards/${board.id}/columns/${deleteColumn.id}`, 'DELETE')); setDeleteColumn(null); }} />}
+    {deleteColumn && <DeleteColumnDialog column={deleteColumn} board={board} onClose={() => setDeleteColumnId(null)} onDeleted={refresh} />}
   </>;
 }
 

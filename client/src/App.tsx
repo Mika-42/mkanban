@@ -5,6 +5,7 @@ import { api, createBoard } from './api';
 import { Avatar, Confirm, McpDialog, Modal, Spinner } from './components';
 import { BoardView } from './BoardView';
 import { CardEditor } from './CardEditor';
+import { BoardsOverview } from './BoardsOverview';
 
 export function App() {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
@@ -26,8 +27,11 @@ export function App() {
   const [saving, setSaving] = useState(false);
   const refreshing = useRef(false);
   const refresh = useCallback(async () => {
-    const list = await api<BoardSummary[]>('/boards'); setBoards(list);
-    const current = list.some(b => b.id === selectedRef.current) ? selectedRef.current : list[0]?.id || null;
+    const requested = selectedRef.current;
+    const list = await api<BoardSummary[]>('/boards');
+    if (requested !== selectedRef.current) return;
+    setBoards(list);
+    const current = list.some(b => b.id === requested) ? requested : null;
     if (current !== selectedRef.current) { selectedRef.current = current; setSelected(current); }
     if (current) {
       const next = await api<Board>(`/boards/${current}`);
@@ -52,6 +56,7 @@ export function App() {
   }, [refresh]);
   const run = async (fn: () => Promise<unknown>) => { setSaving(true); setError(''); try { await fn(); await refresh(); } catch (e) { setError((e as Error).message); } finally { setSaving(false); } };
   const choose = (id: string) => { selectedRef.current = id; setBoard(null); setSelected(id); };
+  const showOverview = () => { selectedRef.current = null; setSelected(null); setBoard(null); setCard(null); setSettings(false); setSidebar(false); };
   const created = async (id: string) => { selectedRef.current = id; setSelected(id); await refresh(); setNewBoard(false); };
   const cards = board?.columns.flatMap(c => c.cards) || [];
   const members = [...new Set(cards.flatMap(c => c.members))].sort();
@@ -67,10 +72,10 @@ export function App() {
   return <div className="app-shell">
     {sidebar && <button className="sidebar-backdrop" aria-label="Fermer la navigation" onClick={() => setSidebar(false)} />}
     <aside className={`sidebar ${sidebar ? 'is-open' : ''}`}>
-      <a className="brand" href="/" aria-label="mkanban, accueil"><span className="brand-mark"><i /><i /><i /></span>mkanban<span className="brand-period">.</span></a>
-      <div className="workspace-switch"><span className="workspace-icon">M</span><div><strong>Mon espace</strong><span>Un peu d’ordre, beaucoup d’idées</span></div><ChevronDown size={14} /></div>
+      <button className="brand" onClick={showOverview} aria-label="mkanban, accueil"><span className="brand-mark"><i /><i /><i /></span>mkanban<span className="brand-period">.</span></button>
+      <button className="workspace-switch" aria-label="Mon espace" onClick={showOverview}><span className="workspace-icon">M</span><span className="workspace-details"><strong>Mon espace</strong><span>Un peu d’ordre, beaucoup d’idées</span></span><ChevronDown size={14} /></button>
       <div className="nav-section-label">ESPACE DE TRAVAIL</div>
-      <button className="nav-item active" onClick={() => { setSidebar(false); if (boards[0] && !board) choose(boards[0].id); }}><LayoutGrid size={18} /><span>Mes tableaux</span><span className="nav-count">{boards.length}</span></button>
+      <button className={`nav-item ${!selected ? 'active' : ''}`} onClick={showOverview}><LayoutGrid size={18} /><span>Mes tableaux</span><span className="nav-count">{boards.length}</span></button>
       <div className="nav-section-label boards-label"><span>MES TABLEAUX</span><button className="icon-button" aria-label="Nouveau tableau" onClick={() => setNewBoard(true)}><Plus size={16} /></button></div>
       <nav className="boards-nav" aria-label="Tableaux">{boards.map(b => <button className={`board-nav ${selected === b.id ? 'current' : ''}`} key={b.id} onClick={() => choose(b.id)}><span className={`board-dot ${b.color}`} /><span>{b.title}</span>{selected === b.id && <ChevronRight size={14} />}</button>)}{!boards.length && <p className="nav-empty">Les grandes idées commencent<br />par un premier tableau.</p>}</nav>
       <button className="new-board-nav" onClick={() => setNewBoard(true)}><Plus size={16} />Nouveau tableau</button>
@@ -79,9 +84,9 @@ export function App() {
       </div>
     </aside>
     <main className="main-panel">
-      <header className="topbar"><div className="breadcrumbs"><button className="icon-button mobile-menu" aria-label="Ouvrir la navigation" onClick={() => setSidebar(true)}><Menu size={20} /></button><FolderKanban size={17} /><span>Mes tableaux</span><ChevronRight size={14} /><strong>{board?.title || 'Bienvenue'}</strong></div><div className="topbar-right"><span className="local-badge"><span className="status-dot" />Local</span><span className="topbar-divider" /><span className="profile-avatar" title="Votre espace personnel">M</span></div></header>
+      <header className="topbar"><div className="breadcrumbs"><button className="icon-button mobile-menu" aria-label="Ouvrir la navigation" onClick={() => setSidebar(true)}><Menu size={20} /></button><FolderKanban size={17} /><button className="breadcrumb-home" aria-label="Tous les tableaux" onClick={showOverview}>Mon espace</button><ChevronRight size={14} /><strong>{selected ? board?.title || 'Chargement…' : 'Mes tableaux'}</strong></div><div className="topbar-right"><span className="local-badge"><span className="status-dot" />Local</span><span className="topbar-divider" /><span className="profile-avatar" title="Votre espace personnel">M</span></div></header>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="text-button" onClick={() => { setError(''); void refresh().catch(e => setError(e.message)); }}>Réessayer</button><button className="icon-button" aria-label="Masquer l’erreur" onClick={() => setError('')}><X size={16} /></button></div>}
-      {!loaded || (selected && !board && boards.length > 0) ? <div className="loading-state"><Spinner />Un instant, vos idées arrivent…</div> : !board ? <div className="welcome"><span className="welcome-eyebrow"><Leaf size={15} />FAITES PLACE AUX IDÉES</span><div className="welcome-illustration"><div className="mini-column"><span /><i /><i /></div><div className="mini-column"><span /><i /></div><div className="mini-column"><span /><i /><i /></div><span className="welcome-spark"><Sparkles size={24} /></span></div><h1>Un peu d’ordre.<br />De grandes possibilités.</h1><p>Vos projets, vos idées, votre façon d’avancer.<br />Créez votre premier tableau et faites de la place à l’essentiel.</p><div className="welcome-actions"><button className="button primary" onClick={() => setNewBoard(true)}><Plus size={17} />Créer mon premier tableau</button><button className="button secondary" disabled={saving} onClick={() => void run(async () => { const b = await createBoard('Lancement produit', true); await created(b.id); })}>{saving ? <Spinner /> : <Sparkles size={16} />}Explorer un exemple</button></div><div className="welcome-promises"><span><FileJson size={15} />Un fichier JSON par tableau</span><span><Cable size={15} />Prêt pour votre IA</span><span><Check size={15} />Simplement local</span></div></div> : <>
+      {!loaded || (selected && !board && boards.length > 0) ? <div className="loading-state"><Spinner />Un instant, vos idées arrivent…</div> : !selected && boards.length ? <BoardsOverview boards={boards} onOpen={choose} onCreate={() => setNewBoard(true)} /> : !board ? <div className="welcome"><span className="welcome-eyebrow"><Leaf size={15} />FAITES PLACE AUX IDÉES</span><div className="welcome-illustration"><div className="mini-column"><span /><i /><i /></div><div className="mini-column"><span /><i /></div><div className="mini-column"><span /><i /><i /></div><span className="welcome-spark"><Sparkles size={24} /></span></div><h1>Un peu d’ordre.<br />De grandes possibilités.</h1><p>Vos projets, vos idées, votre façon d’avancer.<br />Créez votre premier tableau et faites de la place à l’essentiel.</p><div className="welcome-actions"><button className="button primary" onClick={() => setNewBoard(true)}><Plus size={17} />Créer mon premier tableau</button><button className="button secondary" disabled={saving} onClick={() => void run(async () => { const b = await createBoard('Lancement produit', true); await created(b.id); })}>{saving ? <Spinner /> : <Sparkles size={16} />}Explorer un exemple</button></div><div className="welcome-promises"><span><FileJson size={15} />Un fichier JSON par tableau</span><span><Cable size={15} />Prêt pour votre IA</span><span><Check size={15} />Simplement local</span></div></div> : <>
         <section className="board-intro"><div className="board-eyebrow"><span className={`board-dot ${board.color}`} />VOTRE ESPACE POUR AVANCER</div><div className="board-title-bar"><div><h1>{board.title}<button className="icon-button board-settings" aria-label="Paramètres du tableau" onClick={() => setSettings(true)}><MoreHorizontal size={22} /></button></h1><p>{board.description || 'De belles idées méritent un peu d’organisation.'}</p></div><div className="board-actions"><div className="avatar-group team-avatars">{members.slice(0, 3).map(m => <Avatar key={m} name={m} />)}{members.length > 3 && <span className="avatar extra">+{members.length - 3}</span>}</div><button className="button connect-button" onClick={() => setMcp(true)}><Sparkles size={16} />Connecter une IA</button></div></div>
           <div className="board-summary"><span>{cards.length} cartes</span><i /><span><Diamond size={13} />{points} points</span><i /><span className="summary-completed"><CheckCheck size={15} />{completed} terminée{completed > 1 ? 's' : ''}</span><div className="summary-progress"><span style={{ width: `${cards.length ? completed / cards.length * 100 : 0}%` }} /></div></div>
         </section>

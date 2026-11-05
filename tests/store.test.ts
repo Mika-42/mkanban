@@ -73,3 +73,45 @@ test('optimistic concurrency rejects stale card edits and completion does not mo
   const latest = await store.getCard(board.id, card.id);
   assert.equal(latest.title, 'IA'); assert.equal(latest.completed, true); assert.equal(latest.columnId, a.id);
 });
+
+test('column deletion transfers all cards atomically, preserving their content and order', async t => {
+  const { store, directory, board, a, b } = await fixture(t);
+  const existing = await store.createCard(board.id, b.id, { title: 'Déjà là', points: 2 });
+  const first = await store.createCard(board.id, a.id, { title: 'Première', points: 5, description: '**À garder**', dueDate: '2026-12-20', members: ['Mika'], flags: ['Important'], checklist: [{ id: 'task', text: 'Une tâche', done: true }], completed: true });
+  const second = await store.createCard(board.id, a.id, { title: 'Deuxième', points: 3 });
+  const before = await store.getBoard(board.id);
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'move', targetColumnId: a.id }), /autre colonne/);
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'move', targetColumnId: 'missing' }), /introuvable/);
+  const otherBoard = await store.createBoard({ title: 'Autre tableau' });
+  const foreignColumn = await store.createColumn(otherBoard.id, { title: 'Ailleurs' });
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'move', targetColumnId: foreignColumn.id }), /introuvable/);
+  assert.deepEqual(await store.getBoard(board.id), before);
+  assert.deepEqual(await store.deleteColumn(board.id, a.id, { mode: 'move', targetColumnId: b.id }), { deleted: true, movedCards: 2, deletedCards: 0 });
+  const restored = await new Store(directory).getBoard(board.id);
+  assert.equal(restored.columns.length, 1);
+  const cards = restored.columns[0].cards;
+  assert.deepEqual(cards.map(c => c.id), [existing.id, first.id, second.id]);
+  assert.deepEqual(cards.map(c => c.position), [0, 1, 2]);
+  assert.ok(cards.every(c => c.columnId === b.id));
+  assert.equal(cards.reduce((sum, c) => sum + c.points, 0), 10);
+  assert.deepEqual({ ...cards[1], columnId: first.columnId, position: first.position, updatedAt: first.updatedAt }, first);
+  await assert.rejects(store.updateCard(board.id, first.id, { title: 'Ancien brouillon' }, first.updatedAt), /changé/);
+});
+
+test('cascade deletion requires confirmation of the current card IDs and preserves other columns', async t => {
+  const { store, directory, board, a, b } = await fixture(t);
+  const first = await store.createCard(board.id, a.id, { title: 'À supprimer' });
+  const keep = await store.createCard(board.id, b.id, { title: 'À garder' });
+  const late = await store.createCard(board.id, a.id, { title: 'Ajoutée entre-temps' });
+  const before = await store.getBoard(board.id);
+  await assert.rejects(store.deleteColumn(board.id, a.id), /Déplacez/);
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'delete' }));
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'delete', expectedCardIds: [first.id] }), /ont changé/);
+  await assert.rejects(store.deleteColumn(board.id, a.id, { mode: 'delete', expectedCardIds: [first.id, late.id, late.id] }), /ont changé/);
+  assert.deepEqual(await store.getBoard(board.id), before);
+  assert.deepEqual(await store.deleteColumn(board.id, a.id, { mode: 'delete', expectedCardIds: [first.id, late.id] }), { deleted: true, movedCards: 0, deletedCards: 2 });
+  const restored = await new Store(directory).getBoard(board.id);
+  assert.equal(restored.columns.length, 1); assert.deepEqual(restored.columns[0].cards, [keep]);
+  await assert.rejects(store.getCard(board.id, first.id), /introuvable/);
+  await assert.rejects(store.getCard(board.id, late.id), /introuvable/);
+});
