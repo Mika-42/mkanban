@@ -18,7 +18,7 @@ export function createMcpServer(store: Store) {
   const columnId = idSchema.describe('Column UUID');
   const cardId = idSchema.describe('Card UUID');
   server.registerTool('list_boards', { description: 'List local boards and their IDs.', inputSchema: {}, annotations: read }, () => result(() => store.listBoards()));
-  server.registerTool('get_board', { description: 'Read a full board, its columns, cards and computed totals.', inputSchema: { boardId }, annotations: read }, ({ boardId }) => result(async () => {
+  server.registerTool('get_board', { description: 'Read a full board, its columns, cards, computed totals and pointHistory observations (at, total, completed). Point history starts when tracking was available; it does not reconstruct earlier progress.', inputSchema: { boardId }, annotations: read }, ({ boardId }) => result(async () => {
     const board = await store.getBoard(boardId);
     return { ...board, columns: board.columns.map(c => ({ ...c, cardCount: c.cards.length, totalPoints: c.cards.reduce((n, card) => n + card.points, 0) })) };
   }));

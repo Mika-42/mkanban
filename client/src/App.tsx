@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDownToLine, ArrowRight, Cable, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, Cable, ChartNoAxesCombined, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, Command, Diamond, FileJson, FolderKanban, LayoutGrid, Leaf, Menu, MoreHorizontal, Plus, Search, Settings2, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import type { Board, BoardSummary, Card } from '../../server/schema';
 import { api, createBoard } from './api';
 import { Avatar, Confirm, McpDialog, Modal, Spinner } from './components';
 import { BoardView } from './BoardView';
 import { CardEditor } from './CardEditor';
 import { BoardsOverview } from './BoardsOverview';
+import { BoardCharts } from './BoardCharts';
 
 export function App() {
   const [boards, setBoards] = useState<BoardSummary[]>([]);
@@ -18,6 +19,7 @@ export function App() {
   const [status, setStatus] = useState('all');
   const [flag, setFlag] = useState('');
   const [filters, setFilters] = useState(false);
+  const [view, setView] = useState<'table' | 'charts'>('table');
   const [card, setCard] = useState<Card | null>(null);
   const [mcp, setMcp] = useState(false);
   const [newBoard, setNewBoard] = useState(false);
@@ -42,7 +44,7 @@ export function App() {
   useEffect(() => { refresh().catch(e => { setError(e.message); setLoaded(true); }); }, [refresh]);
   useEffect(() => {
     if (selected) localStorage.setItem('mkanban.board', selected); else localStorage.removeItem('mkanban.board');
-    setSearch(''); setMember(''); setStatus('all'); setFlag(''); setCard(null); setSidebar(false);
+    setSearch(''); setMember(''); setStatus('all'); setFlag(''); setCard(null); setSidebar(false); setView('table');
     refresh().catch(e => setError(e.message));
   }, [selected, refresh]);
   // Reload JSON-backed state, including edits from separate MCP stdio processes.
@@ -90,9 +92,13 @@ export function App() {
         <section className="board-intro"><div className="board-eyebrow"><span className={`board-dot ${board.color}`} />VOTRE ESPACE POUR AVANCER</div><div className="board-title-bar"><div><h1>{board.title}<button className="icon-button board-settings" aria-label="Paramètres du tableau" onClick={() => setSettings(true)}><MoreHorizontal size={22} /></button></h1><p>{board.description || 'De belles idées méritent un peu d’organisation.'}</p></div><div className="board-actions"><div className="avatar-group team-avatars">{members.slice(0, 3).map(m => <Avatar key={m} name={m} />)}{members.length > 3 && <span className="avatar extra">+{members.length - 3}</span>}</div><button className="button connect-button" onClick={() => setMcp(true)}><Sparkles size={16} />Connecter une IA</button></div></div>
           <div className="board-summary"><span>{cards.length} cartes</span><i /><span><Diamond size={13} />{points} points</span><i /><span className="summary-completed"><CheckCheck size={15} />{completed} terminée{completed > 1 ? 's' : ''}</span><div className="summary-progress"><span style={{ width: `${cards.length ? completed / cards.length * 100 : 0}%` }} /></div></div>
         </section>
-        <div className="board-toolbar"><div className="view-tab"><LayoutGrid size={16} />Tableau<span>{board.columns.length}</span></div><div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le tableau JSON" aria-label="Exporter le tableau JSON" onClick={download}><ArrowDownToLine size={18} /></button></div></div>
-        {filters && <div className="filter-panel"><label>Membre<select value={member} onChange={e => setMember(e.target.value)}><option value="">Tous les membres</option>{members.map(m => <option key={m}>{m}</option>)}</select></label><label>Étiquette<select value={flag} onChange={e => setFlag(e.target.value)}><option value="">Toutes les étiquettes</option>{flags.map(f => <option key={f}>{f}</option>)}</select></label><label>État<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">Toutes les cartes</option><option value="active">Non terminées</option><option value="completed">Terminées</option></select></label><button className="text-button" onClick={() => { setMember(''); setFlag(''); setStatus('all'); }}>Réinitialiser</button><span className="hint">Les totaux des colonnes incluent toutes les cartes.</span></div>}
-        <BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} />
+        <div className="board-toolbar"><div className="board-tabs" role="tablist" aria-label="Vues du tableau" onKeyDown={e => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+          e.preventDefault(); const next = e.key === 'Home' ? 'table' : e.key === 'End' ? 'charts' : view === 'table' ? 'charts' : 'table';
+          setView(next); document.getElementById(next === 'table' ? 'board-tab' : 'charts-tab')?.focus();
+        }}><button id="board-tab" role="tab" aria-controls="board-panel" aria-selected={view === 'table'} tabIndex={view === 'table' ? 0 : -1} className={`view-tab ${view === 'table' ? 'active' : ''}`} onClick={() => setView('table')}><LayoutGrid size={16} />Tableau<span>{board.columns.length}</span></button><button id="charts-tab" role="tab" aria-controls="charts-panel" aria-selected={view === 'charts'} tabIndex={view === 'charts' ? 0 : -1} className={`view-tab ${view === 'charts' ? 'active' : ''}`} onClick={() => setView('charts')}><ChartNoAxesCombined size={17} />Graphiques</button></div>{view === 'table' ? <div className="toolbar-controls"><div className="search-field"><Search size={16} /><input aria-label="Rechercher des cartes" placeholder="Rechercher une carte…" value={search} onChange={e => setSearch(e.target.value)} />{search ? <button aria-label="Effacer la recherche" onClick={() => setSearch('')}><X size={14} /></button> : <kbd><Command size={11} />K</kbd>}</div><button className={`button filter-button ${filters || filtersCount ? 'selected' : ''}`} aria-expanded={filters} onClick={() => setFilters(!filters)}><SlidersHorizontal size={16} /><span>Filtres</span>{filtersCount > 0 && <span className="filter-count">{filtersCount}</span>}</button><button className="icon-button export-button" title="Exporter le tableau JSON" aria-label="Exporter le tableau JSON" onClick={download}><ArrowDownToLine size={18} /></button></div> : <span className="chart-toolbar-note">Suivi en story points</span>}</div>
+        {view === 'table' && filters && <div className="filter-panel"><label>Membre<select value={member} onChange={e => setMember(e.target.value)}><option value="">Tous les membres</option>{members.map(m => <option key={m}>{m}</option>)}</select></label><label>Étiquette<select value={flag} onChange={e => setFlag(e.target.value)}><option value="">Toutes les étiquettes</option>{flags.map(f => <option key={f}>{f}</option>)}</select></label><label>État<select value={status} onChange={e => setStatus(e.target.value)}><option value="all">Toutes les cartes</option><option value="active">Non terminées</option><option value="completed">Terminées</option></select></label><button className="text-button" onClick={() => { setMember(''); setFlag(''); setStatus('all'); }}>Réinitialiser</button><span className="hint">Les totaux des colonnes incluent toutes les cartes.</span></div>}
+        {view === 'table' ? <div className="board-panel" role="tabpanel" id="board-panel" aria-labelledby="board-tab"><BoardView board={board} search={search} member={member} status={status} flag={flag} onCard={setCard} refresh={refresh} run={run} /></div> : <BoardCharts key={board.id} board={board} />}
         <footer className="board-footer"><span><span className="status-dot" />{saving ? 'Enregistrement…' : 'Enregistré localement'}<span className="footer-file"><FileJson size={13} />1 tableau = 1 fichier JSON</span></span><span>Faites glisser vos idées. Faites avancer vos projets.<Leaf size={13} /></span></footer>
       </>}
     </main>

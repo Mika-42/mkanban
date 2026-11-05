@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { readFile } from 'node:fs/promises';
 
 async function fixture(page: Page, request: APIRequestContext) {
   const board = await (await request.post('/api/boards', { data: { title: `Tableau de test ${crypto.randomUUID().slice(0, 8)}` } })).json();
@@ -211,5 +212,76 @@ test('mobile workspace navigation and confirmed deletion of the last populated c
   await page.getByRole('button', { name: 'Supprimer la colonne et ses fiches', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   expect((await read()).columns).toHaveLength(0);
+  await request.delete(`/api/boards/${board.id}`);
+});
+
+test('charts show actual story points, validate periods, support keyboard exploration and export data and SVG', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'À terminer', points: 8 } });
+  await request.post(`/api/boards/${board.id}/columns/${a.id}/cards`, { data: { title: 'Terminée', points: 3, completed: true } });
+  await page.goto('/');
+  await page.getByRole('tab', { name: 'Graphiques', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Graphiques', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: 'Burn-up', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Burn-down', exact: true })).toBeVisible();
+  await expect(page.locator('.chart-metrics>div').nth(0).locator('strong')).toContainText('11');
+  await expect(page.locator('.chart-metrics>div').nth(1).locator('strong')).toContainText('3');
+  await expect(page.locator('.chart-metrics>div').nth(2).locator('strong')).toContainText('8');
+  const slider = page.getByRole('slider', { name: 'Explorer le Burn-up', exact: true });
+  await slider.focus(); await slider.press('Home');
+  await expect(slider).toHaveAttribute('aria-valuenow', '0');
+  await slider.press('End');
+  await expect(slider).toHaveAttribute('aria-valuetext', /Terminés : 3, Total : 11/);
+  const today = await page.evaluate(() => new Date().toLocaleDateString('sv-SE'));
+  await page.getByLabel('Du', { exact: true }).fill(today);
+  await page.getByRole('button', { name: 'Voir les valeurs', exact: true }).click();
+  const cells = page.getByRole('table').locator('tbody tr').last().locator('td');
+  await expect(cells).toHaveText(['11', '3', '8', '8']);
+  const csvPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Exporter les données CSV', exact: true }).click();
+  const csv = await csvPromise;
+  expect(await readFile((await csv.path())!, 'utf8')).toContain(`${today};11;3;8;8`);
+  const imagePromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Télécharger le Burn-up en SVG', exact: true }).click();
+  const image = await imagePromise;
+  const source = await readFile((await image.path())!, 'utf8');
+  expect(source).toContain('xmlns="http://www.w3.org/2000/svg"'); expect(source).toContain('Burn-up'); expect(source).not.toContain('role="slider"');
+  await page.getByLabel('Au', { exact: true }).fill('2020-01-01');
+  await expect(page.getByRole('alert')).toContainText('date de fin');
+  await expect(page.getByRole('button', { name: 'Exporter les données CSV', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '30 jours', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Graphiques', exact: true }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.getByRole('tab', { name: /^Tableau/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: 'À terminer', exact: true })).toBeVisible();
+  expect((await read()).pointHistory.at(-1)).toMatchObject({ total: 11, completed: 3 });
+  await request.delete(`/api/boards/${board.id}`);
+});
+
+test('charts remain open and update after MCP changes, with a responsive layout and an honest empty state', async ({ page, request }) => {
+  const { board, a, read } = await fixture(page, request);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('tab', { name: 'Graphiques', exact: true }).click();
+  await expect(page.locator('.chart-metrics>div').nth(0).locator('strong')).toContainText('0');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const client = new Client({ name: 'chart-test', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:3100/mcp')));
+  const created = await client.callTool({ name: 'create_card', arguments: { boardId: board.id, columnId: a.id, title: 'Points via MCP', points: 5, completed: true } });
+  expect(created.isError).not.toBe(true);
+  await expect(page.locator('.chart-metrics>div').nth(1).locator('strong')).toContainText('5', { timeout: 8000 });
+  await expect(page.getByRole('tab', { name: 'Graphiques', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const card = (await read()).columns[0].cards[0];
+  await client.callTool({ name: 'update_card', arguments: { boardId: board.id, cardId: card.id, completed: false, points: 8 } });
+  await expect(page.locator('.chart-metrics>div').nth(2).locator('strong')).toContainText('8', { timeout: 8000 });
+  await expect(page.locator('.chart-metrics>div').nth(1).locator('strong')).toContainText('0');
+  await page.getByLabel('Du', { exact: true }).fill('2020-01-01');
+  await page.getByLabel('Au', { exact: true }).fill('2020-01-03');
+  await expect(page.getByText('Aucune observation sur cette période', { exact: true })).toHaveCount(2);
+  await page.getByRole('button', { name: 'Voir les valeurs', exact: true }).click();
+  await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(3);
+  await expect(page.getByRole('table').locator('tbody tr').first().locator('td')).toHaveText(['—', '—', '—', '—']);
+  await client.close();
   await request.delete(`/api/boards/${board.id}`);
 });
